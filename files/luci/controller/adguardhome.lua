@@ -111,6 +111,7 @@ function index()
     entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"), nil, true)
     entry({"admin", "services", "adguardhome", "log"}, call("get_log"), nil, true)
     entry({"admin", "services", "adguardhome", "proxy_test"}, call("proxy_test"), nil, true)
+    entry({"admin", "services", "adguardhome", "set_proxy"}, call("set_proxy"), nil, true)
 end
 
 -- 通用的调用上游安装脚本函数，flags 表示附加参数字符串（如 "-r"）
@@ -369,6 +370,20 @@ function proxy_test()
     else
         http.write_json({ ok = false, error = "timeout or unreachable" })
     end
+end
+
+function set_proxy()
+    local proxy = post_value("proxy") or ""
+    if proxy and proxy ~= "" then
+        fs.writefile(PROXY_CONF, "proxy=" .. proxy .. "\n")
+        PROXY_LIST[1] = proxy
+    else
+        -- clear
+        if fs.access(PROXY_CONF) then fs.unlink(PROXY_CONF) end
+        PROXY_LIST[1] = nil
+    end
+    http.prepare_content("application/json")
+    http.write_json({ success = true, proxy = proxy })
 end
 
 function get_log()

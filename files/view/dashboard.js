@@ -60,6 +60,12 @@ var _EN = {
     '确认安装': 'Confirm Install',
     '安装任务已启动，请在下方日志查看器中查看进度': 'Install task started, check progress in the log viewer below',
     '安装任务启动失败': 'Install task failed to start',
+    '代理/加速：': 'Proxy / Accelerator:',
+    '原始 (github.com)': 'Raw (github.com)',
+    '自定义...': 'Custom...',
+    '使用代理：': 'Using proxy:',
+    '测试': 'Test',
+    '延迟: ': 'Latency: ',
     '✔ 已安装系统服务 | ✔ 开机自启已注册': '✔ System service installed | ✔ Auto-start registered',
     '⚠️ 未注册服务 (使用二进制保底控制)': '⚠ Not registered (Using binary fallback)',
     '● 正在运行': '● Running',
@@ -137,20 +143,28 @@ return view.extend({
 
     sendAction: function(action) {
         var url = L.url('admin/services/adguardhome/action');
-        return request.post(url, { action: action }).then(function(res) {
+        var data = {};
+        if (arguments.length > 1 && arguments[1]) data = arguments[1];
+        data.action = action;
+        return request.post(url, data).then(function(res) {
             return res.json();
         });
     },
 
     fetchUpdate: function() {
-        return request.get(L.url('admin/services/adguardhome/check_update')).then(function(res) {
+        var data = {};
+        if (this.selectedProxy) data.proxy = this.selectedProxy;
+        return request.post(L.url('admin/services/adguardhome/check_update'), data).then(function(res) {
             return res.json();
         });
     },
 
     sendUpgrade: function(force) {
         var url = L.url('admin/services/adguardhome/upgrade');
-        return request.post(url, { force: force ? '1' : '0' }).then(function(res) {
+        var data = {};
+        if (arguments.length > 1 && arguments[1]) data = arguments[1];
+        data.force = force ? '1' : '0';
+        return request.post(url, data).then(function(res) {
             return res.json();
         });
     },
@@ -243,6 +257,54 @@ return view.extend({
             click: function() { self.refreshLog(); }
         }, T('刷新日志'));
 
+        // 代理选项：内置 + 原始 + 自定义
+        var proxyOptions = [
+            { label: T('原始 (github.com)'), value: '' },
+            { label: 'https://ghfast.top/', value: 'https://ghfast.top/' },
+            { label: 'https://gh-proxy.com/', value: 'https://gh-proxy.com/' },
+            { label: 'https://kkgithub.com/', value: 'https://kkgithub.com/' },
+            { label: T('自定义...'), value: 'custom' }
+        ];
+        var proxySelect = E('select', { style: 'margin-right:8px' }, proxyOptions.map(function(o) { return E('option', { value: o.value }, o.label); }));
+        var proxyCustom = E('input', { type: 'text', placeholder: 'https://ghfast.top/', style: 'width:220px; margin-right:8px; display:none' });
+        var proxyTestBtn = E('button', { class: 'btn cbi-button cbi-button-action', style: 'margin-right:8px' }, T('测试'));
+        // initialize selectedProxy from backend status if present
+        if (this.statusData && this.statusData.proxy) {
+            var found = false;
+            for (var i=0;i<proxySelect.options.length;i++) {
+                if (proxySelect.options[i].value === this.statusData.proxy) { proxySelect.selectedIndex = i; found = true; break; }
+            }
+            if (!found) { proxySelect.value = 'custom'; proxyCustom.style.display = ''; proxyCustom.value = this.statusData.proxy; }
+            this.selectedProxy = this.statusData.proxy;
+        } else {
+            this.selectedProxy = '';
+        }
+        proxySelect.addEventListener('change', function() {
+            if (proxySelect.value === 'custom') {
+                proxyCustom.style.display = '';
+                proxyCustom.focus();
+                self.selectedProxy = proxyCustom.value.trim();
+                // immediately persist empty custom until user types
+                request.post(L.url('admin/services/adguardhome/set_proxy'), { proxy: '' }).catch(function() {});
+            } else {
+                proxyCustom.style.display = 'none';
+                self.selectedProxy = proxySelect.value;
+                request.post(L.url('admin/services/adguardhome/set_proxy'), { proxy: self.selectedProxy }).catch(function() {});
+            }
+        });
+        proxyCustom.addEventListener('input', function() { self.selectedProxy = proxyCustom.value.trim(); });
+        proxyTestBtn.addEventListener('click', function() {
+            proxyTestBtn.disabled = true; proxyTestBtn.textContent = '...';
+            // persist current custom proxy before testing
+            request.post(L.url('admin/services/adguardhome/set_proxy'), { proxy: self.selectedProxy || '' }).catch(function() {});
+            request.post(L.url('admin/services/adguardhome/proxy_test'), { proxy: self.selectedProxy || '' }).then(function(res) { return res.json(); }).then(function(r) {
+                if (r && r.ok) ui.addNotification(null, T('延迟: ') + (r.latency*1000).toFixed(0) + ' ms', 'info');
+                else ui.addNotification(null, T('测试') + ' failed', 'error');
+            }).catch(function() { ui.addNotification(null, T('测试') + ' failed', 'error'); }).then(function() { proxyTestBtn.disabled = false; proxyTestBtn.textContent = T('测试'); });
+        });
+
+        var proxyControls = E('div', { style: 'margin-bottom:12px;' }, [E('strong', {}, T('代理/加速：')), proxySelect, proxyCustom, proxyTestBtn]);
+
         var node = E('div', { class: 'cbi-map' }, [
             E('h2', {}, T('AdGuard Home 控制中心')),
             E('div', { class: 'cbi-map-descr' }, T('实时状态监控 · 服务控制 · 日志查看 · 一键升级')),
@@ -317,6 +379,7 @@ return view.extend({
             E('div', { class: 'cbi-section' }, [
                 E('h3', {}, T('版本更新')),
                 E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [
+                    proxyControls,
                     E('div', { style: 'margin-bottom:12px;' }, [
                         E('strong', {}, T('当前版本：')),
                         E('code', { style: 'margin-right:20px' }, versionStr),
@@ -440,7 +503,7 @@ return view.extend({
     execAction: function(action) {
         var self = this;
         ui.showModal(E('h4', {}, T('执行中...')), [E('p', { class: 'spinning' }, action)]);
-        this.sendAction(action).then(function(res) {
+        this.sendAction(action, self.selectedProxy ? { proxy: self.selectedProxy } : {}).then(function(res) {
             ui.hideModal();
             if (res && res.success) {
                 ui.addNotification(null, T('操作执行成功'), 'info');
@@ -484,13 +547,15 @@ return view.extend({
 
     doInstallCore: function() {
         var self = this;
+        var usedProxy = this.selectedProxy || '';
         ui.showModal(E('h4', {}, T('下载安装 AdGuard Home')), [
             E('p', {}, T('将从 GitHub 官方脚本下载安装 AdGuard Home 核心。安装期间请保持网络连接。')),
+            E('p', {}, [E('strong', {}, '使用代理：'), E('code', {}, usedProxy || '原始 (github.com)')]),
             E('div', { style: 'text-align:right; margin-top:15px;' }, [
                 E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
                 E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px', click: function() {
                     ui.hideModal();
-                    self.sendAction('install_core').then(function(res) {
+                    self.sendAction('install_core', usedProxy ? { proxy: usedProxy } : {}).then(function(res) {
                         if (res && res.success) {
                             ui.addNotification(null, T('安装任务已启动，请在下方日志查看器中查看进度'), 'info');
                             self.startLogPolling();
@@ -511,14 +576,19 @@ return view.extend({
         var desc = force
             ? T('将强制下载在线最新版本并覆盖安装当前版本。升级期间服务将中断。')
             : T('将下载并安装最新版本的 AdGuard Home 核心。升级期间服务可能短暂中断。');
-
+        var infoText = force
+            ? T('强制重装会覆盖当前二进制，通常会保留数据目录配置，但建议先备份。')
+            : T('常规升级会尝试就地更新并保留配置与历史记录。');
+        var usedProxy = this.selectedProxy || '';
         ui.showModal(E('h4', {}, title), [
             E('p', {}, desc),
+            E('p', {}, infoText),
+            E('p', {}, [E('strong', {}, '使用代理：'), E('code', {}, usedProxy || '原始 (github.com)')]),
             E('div', { style: 'text-align:right; margin-top:15px;' }, [
                 E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
                 E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px', click: function() {
                     ui.hideModal();
-                    self.sendUpgrade(force).then(function() {
+                    self.sendUpgrade(force, usedProxy ? { proxy: usedProxy } : {}).then(function() {
                         var msg = force ? T('强制重装任务已启动，请在下方日志查看器中查看进度') : T('升级任务已启动，请在下方日志查看器中查看进度');
                         ui.addNotification(null, msg, 'info');
                         self.startLogPolling();
