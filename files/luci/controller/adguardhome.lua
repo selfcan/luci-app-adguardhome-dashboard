@@ -110,6 +110,20 @@ function index()
     entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"), nil, true)
     entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"), nil, true)
     entry({"admin", "services", "adguardhome", "log"}, call("get_log"), nil, true)
+    entry({"admin", "services", "adguardhome", "proxy_test"}, call("proxy_test"), nil, true)
+end
+
+-- 通用的调用上游安装脚本函数，flags 表示附加参数字符串（如 "-r"）
+local function run_install_script(flags)
+    load_proxies()
+    local install_url = gh_url("https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh")
+    os.execute("echo '=== AdGuardHome 安装任务开始 ===' > " .. UPGRADE_LOG)
+    local cmd = "curl -fsSL '" .. install_url .. "' | sh"
+    if flags and flags ~= "" then
+        cmd = cmd .. " -s -- " .. flags
+    end
+    cmd = cmd .. " >> " .. UPGRADE_LOG .. " 2>&1 &"
+    os.execute(cmd)
 end
 
 function get_status()
@@ -182,6 +196,17 @@ function get_status()
         end
     end
 
+    -- 返回当前已配置的 GitHub 代理（如有）以便前端预填
+    if fs.access(PROXY_CONF) then
+        local content = fs.readfile(PROXY_CONF)
+        if content then
+            local saved = content:match("proxy%s*=%s*(%S+)")
+            if saved and saved ~= "" then
+                status.proxy = saved
+            end
+        end
+    end
+
     http.prepare_content("application/json")
     http.write_json(status)
 end
@@ -218,8 +243,16 @@ function do_action()
     if action == "install_core" then
         load_proxies()
         local install_url = gh_url("https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh")
+        -- 如果前端传入代理 (proxy)，则持久化并优先使用
+        local proxy = post_value("proxy")
+        if proxy and proxy ~= "" then
+            fs.writefile(PROXY_CONF, "proxy=" .. proxy .. "\n")
+            PROXY_LIST[1] = proxy
+        end
+
         os.execute("echo '=== AdGuardHome 核心安装任务开始 ===' > " .. UPGRADE_LOG)
-        os.execute("curl -fsSL '" .. install_url .. "' | sh >> " .. UPGRADE_LOG .. " 2>&1 &")
+        -- 使用 -r 以非交互方式覆盖安装（install_core 在 UI 会弹确认）
+        os.execute("curl -fsSL '" .. install_url .. "' | sh -s -- -r >> " .. UPGRADE_LOG .. " 2>&1 &")
         http.prepare_content("application/json")
         http.write_json({ success = true })
         return
@@ -230,23 +263,27 @@ function do_action()
     local cmd
 
     if action == "install_service" then
-        if bin_path then
-            cmd = bin_path .. " -s install"
-        else
-            http.prepare_content("application/json")
-            http.write_json({ success = false, error = "binary not found" })
-            return
+        -- 安装核心（默认非强制覆盖）。前端可通过 status/proxy 或 check UI 选择代理。
+        local proxy = post_value("proxy")
+        if proxy and proxy ~= "" then
+            fs.writefile(PROXY_CONF, "proxy=" .. proxy .. "\n")
+            PROXY_LIST[1] = proxy
         end
+        run_install_script("")
+        http.prepare_content("application/json")
+        http.write_json({ success = true })
+        return
+    end
+
+    -- 常规服务控制：优先使用 init 脚本，其次回退到二进制的 -s 控制
+    if init_script then
+        cmd = init_script .. " " .. action
+    elseif bin_path then
+        cmd = bin_path .. " -s " .. action
     else
-        if init_script then
-            cmd = init_script .. " " .. action
-        elseif bin_path then
-            cmd = bin_path .. " -s " .. action
-        else
-            http.prepare_content("application/json")
-            http.write_json({ success = false, error = "no init script or binary found" })
-            return
-        end
+        http.prepare_content("application/json")
+        http.write_json({ success = false, error = "no init script or binary found" })
+        return
     end
 
     local result = util.exec(cmd .. " 2>&1")
@@ -256,6 +293,13 @@ end
 
 function check_update()
     load_proxies()
+    -- 支持前端传入 proxy 覆盖本次请求
+    local proxy = post_value("proxy")
+    if proxy and proxy ~= "" then
+        fs.writefile(PROXY_CONF, "proxy=" .. proxy .. "\n")
+        PROXY_LIST[1] = proxy
+    end
+
     local output = try_with_proxies("https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest")
     local latest = ""
     if output and #output > 0 then
@@ -283,22 +327,57 @@ function do_upgrade()
                 os.execute(bin_path .. " -s stop >> " .. UPGRADE_LOG .. " 2>&1")
             end
         end
-        os.execute("sleep 2 && curl -fsSL '" .. install_url .. "' | sh >> " .. UPGRADE_LOG .. " 2>&1 &")
+        -- 使用通用调用，传入 -r 以表示强制重装
+        run_install_script("-r")
     else
-        os.execute("curl -fsSL '" .. install_url .. "' | sh >> " .. UPGRADE_LOG .. " 2>&1 &")
+        -- 如果前端传入 proxy，则持久化并优先使用（临时覆盖代理配置）
+        local proxy = post_value("proxy")
+        if proxy and proxy ~= "" then
+            fs.writefile(PROXY_CONF, "proxy=" .. proxy .. "\n")
+            PROXY_LIST[1] = proxy
+        end
+
+        -- 非强制升级：优先使用已安装二进制的内置更新机制（--update），
+        -- 若二进制不存在则回退到官方安装脚本（不使用 -r，以避免覆盖询问）。
+        local bin_path = find_binary()
+        if bin_path then
+            os.execute(bin_path .. " --update >> " .. UPGRADE_LOG .. " 2>&1 &")
+        else
+            run_install_script("")
+        end
     end
 
     http.prepare_content("application/json")
     http.write_json({ success = true })
 end
 
+function proxy_test()
+    local proxy = post_value("proxy") or ""
+    -- 测试通过代理访问 GitHub API 的延迟（短超时）
+    local test_url = "https://api.github.com/"
+    local curl_cmd
+    if proxy and proxy ~= "" then
+        curl_cmd = "curl -o /dev/null -s -w '%{time_total}' -m 10 '" .. proxy .. test_url .. "' 2>/dev/null"
+    else
+        curl_cmd = "curl -o /dev/null -s -w '%{time_total}' -m 10 '" .. test_url .. "' 2>/dev/null"
+    end
+    local out = util.exec(curl_cmd) or ""
+    local latency = tonumber(out) or -1
+    http.prepare_content("application/json")
+    if latency >= 0 then
+        http.write_json({ ok = true, latency = latency })
+    else
+        http.write_json({ ok = false, error = "timeout or unreachable" })
+    end
+end
+
 function get_log()
     local content = ""
 
-    -- 优先返回升级日志
+    -- 优先返回升级日志（即使较短也返回）
     if fs.access(UPGRADE_LOG) then
         local data = fs.readfile(UPGRADE_LOG)
-        if data and #data > 100 then
+        if data and #data > 0 then
             content = data
         end
     end
@@ -313,7 +392,7 @@ function get_log()
         for _, lf in ipairs(agh_logs) do
             if fs.access(lf) then
                 local data = fs.readfile(lf)
-                if data and #data > 50 then
+                if data and #data > 0 then
                     content = data
                     break
                 end
