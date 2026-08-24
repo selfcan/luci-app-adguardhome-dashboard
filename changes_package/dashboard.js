@@ -279,13 +279,35 @@ return view.extend({
         } else {
             this.selectedProxy = '';
         }
+        // initialize selectedProxy from backend status if present
+        if (this.statusData && this.statusData.proxy) {
+            var found = false;
+            for (var i=0;i<proxySelect.options.length;i++) {
+                if (proxySelect.options[i].value === this.statusData.proxy) { proxySelect.selectedIndex = i; found = true; break; }
+            }
+            if (!found) { proxySelect.value = 'custom'; proxyCustom.style.display = ''; proxyCustom.value = this.statusData.proxy; }
+            this.selectedProxy = this.statusData.proxy;
+        } else {
+            this.selectedProxy = '';
+        }
         proxySelect.addEventListener('change', function() {
-            if (proxySelect.value === 'custom') { proxyCustom.style.display = ''; proxyCustom.focus(); self.selectedProxy = proxyCustom.value.trim(); }
-            else { proxyCustom.style.display = 'none'; self.selectedProxy = proxySelect.value; }
+            if (proxySelect.value === 'custom') {
+                proxyCustom.style.display = '';
+                proxyCustom.focus();
+                self.selectedProxy = proxyCustom.value.trim();
+                // immediately persist empty custom until user types
+                request.post(L.url('admin/services/adguardhome/set_proxy'), { proxy: '' }).catch(function() {});
+            } else {
+                proxyCustom.style.display = 'none';
+                self.selectedProxy = proxySelect.value;
+                request.post(L.url('admin/services/adguardhome/set_proxy'), { proxy: self.selectedProxy }).catch(function() {});
+            }
         });
         proxyCustom.addEventListener('input', function() { self.selectedProxy = proxyCustom.value.trim(); });
         proxyTestBtn.addEventListener('click', function() {
             proxyTestBtn.disabled = true; proxyTestBtn.textContent = '...';
+            // persist current custom proxy before testing
+            request.post(L.url('admin/services/adguardhome/set_proxy'), { proxy: self.selectedProxy || '' }).catch(function() {});
             request.post(L.url('admin/services/adguardhome/proxy_test'), { proxy: self.selectedProxy || '' }).then(function(res) { return res.json(); }).then(function(r) {
                 if (r && r.ok) ui.addNotification(null, T('延迟: ') + (r.latency*1000).toFixed(0) + ' ms', 'info');
                 else ui.addNotification(null, T('测试') + ' failed', 'error');

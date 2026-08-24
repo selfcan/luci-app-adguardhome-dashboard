@@ -1,3 +1,4 @@
+-- This file mirrors the latest controller implementation from files/luci/controller/adguardhome.lua
 module("luci.controller.adguardhome", package.seeall)
 
 local util = require "luci.util"
@@ -111,6 +112,7 @@ function index()
     entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"), nil, true)
     entry({"admin", "services", "adguardhome", "log"}, call("get_log"), nil, true)
     entry({"admin", "services", "adguardhome", "proxy_test"}, call("proxy_test"), nil, true)
+    entry({"admin", "services", "adguardhome", "set_proxy"}, call("set_proxy"), nil, true)
 end
 
 -- 通用的调用上游安装脚本函数，flags 表示附加参数字符串（如 "-r")
@@ -194,15 +196,15 @@ function get_status()
                 end
             end
         end
+    end
 
-        -- 返回当前已配置的 GitHub 代理（如有）以便前端预填
-        if fs.access(PROXY_CONF) then
-            local content = fs.readfile(PROXY_CONF)
-            if content then
-                local saved = content:match("proxy%s*=%s*(%S+)")
-                if saved and saved ~= "" then
-                    status.proxy = saved
-                end
+    -- 返回当前已配置的 GitHub 代理（如有）以便前端预填
+    if fs.access(PROXY_CONF) then
+        local content = fs.readfile(PROXY_CONF)
+        if content then
+            local saved = content:match("proxy%s*=%s*(%S+)")
+            if saved and saved ~= "" then
+                status.proxy = saved
             end
         end
     end
