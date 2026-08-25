@@ -259,6 +259,22 @@ download_from_github() {
     dl "files/view/dashboard.js"                                   "$DOWNLOAD_DIR/view/dashboard.js"
     dl "files/luci/i18n/adguardhome.lmo"                           "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo"
     dl "files/luci/i18n/adguardhome.zh-cn.lmo"                     "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo"
+    # 下载校验和清单（内容指纹，用于 sha256 比对，防止代理缓存旧版本）
+    if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
+        -o "$DOWNLOAD_DIR/checksums.sha256" "${RAW_BASE}/checksums.sha256?_cb=${_cb}" 2>/dev/null; then
+        log "  ✓ checksums.sha256"
+    else
+        _cs_ok=0
+        for _p in $PROXY_LIST; do
+            if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
+                -o "$DOWNLOAD_DIR/checksums.sha256" "${_p}${_gh_raw}/checksums.sha256?_cb=${_cb}" 2>/dev/null; then
+                log "  ✓ checksums.sha256 (via $(echo "$_p" | sed 's|https\{0,1\}://||;s|/$||'))"
+                _cs_ok=1
+                break
+            fi
+        done
+        [ "$_cs_ok" = "1" ] || log "  ⚠ checksums.sha256 下载失败，将仅做语义特征校验"
+    fi
     log "所有文件下载完成"
 }
 
@@ -288,6 +304,60 @@ if [ -f "$LOCAL_FILES/luci/controller/adguardhome.lua" ]; then
 else
     download_from_github
 fi
+
+# ── 辅助：计算 sha256（兼容无 sha256sum 的环境降级到 openssl）──
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl sha256 "$1" 2>/dev/null | awk '{print $NF}'
+    fi
+}
+
+# ── 内容校验：sha256 指纹（主） + 语义特征（兜底）──
+# 防止代理/CDN 返回缓存中的旧版本（曾因 ghfast.top 缓存旧 dashboard.js 导致备份管理缺失）。
+# sha256 比对能拦下"任何与发布清单不一致的内容"（不限于缺失某功能）；
+# 若 checksums.sha256 不可用，则降级为语义特征校验（fetchBackups / list_backups）。
+verify_one() {
+    _src="$1"; _f="$2"
+    _ok=1
+    if [ -f "$DOWNLOAD_DIR/checksums.sha256" ]; then
+        _exp=$(grep -F " $_src" "$DOWNLOAD_DIR/checksums.sha256" 2>/dev/null | awk '{print $1}' | head -n1)
+        if [ -n "$_exp" ]; then
+            _act=$(sha256_of "$_f")
+            if [ -n "$_act" ] && [ "$_exp" != "$_act" ]; then
+                log "  ✗ sha256 不匹配: $_src"
+                log "    期望: $_exp"
+                log "    实际: $_act"
+                log "    → 极可能是代理/CDN 缓存的旧版本"
+                _ok=0
+            fi
+        fi
+    fi
+    case "$_src" in
+        files/view/dashboard.js)
+            grep -q 'fetchBackups' "$_f" 2>/dev/null || { log "  ✗ dashboard.js 缺少备份管理功能（代理缓存旧版？）"; _ok=0; } ;;
+        files/luci/controller/adguardhome.lua)
+            grep -q 'list_backups' "$_f" 2>/dev/null || { log "  ✗ adguardhome.lua 缺少备份 API（代理缓存旧版？）"; _ok=0; } ;;
+    esac
+    return $_ok
+}
+
+log "校验下载文件内容（sha256 指纹 + 语义特征，防止代理缓存旧版本）..."
+_fail=0
+verify_one "files/luci/controller/adguardhome.lua"                  "$DOWNLOAD_DIR/luci/controller/adguardhome.lua" || _fail=1
+verify_one "files/luci/menu.d/luci-app-adguardhome-dashboard.json" "$DOWNLOAD_DIR/luci/menu.d/luci-app-adguardhome-dashboard.json" || _fail=1
+verify_one "files/luci/acl.json"                                    "$DOWNLOAD_DIR/luci/acl.json" || _fail=1
+verify_one "files/view/dashboard.js"                                "$DOWNLOAD_DIR/view/dashboard.js" || _fail=1
+verify_one "files/luci/i18n/adguardhome.lmo"                        "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo" || _fail=1
+verify_one "files/luci/i18n/adguardhome.zh-cn.lmo"                 "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo" || _fail=1
+if [ "$_fail" = "1" ]; then
+    log "内容校验失败：极可能是代理/CDN 缓存了旧版本"
+    log "解决: 更换代理 GITHUB_PROXY=https://kkgithub.com/ 或 GITHUB_PROXY=https://gh-proxy.com/ 后重试"
+    rm -rf "$TMPDIR"
+    exit 1
+fi
+log "  ✓ 内容校验通过（sha256 指纹 + 语义特征）"
 
 # ── 备份当前安装的文件（与面板升级的两阶段提交保持一致）────────────
 TS=$(date '+%Y%m%d_%H%M%S' 2>/dev/null || date +%s 2>/dev/null || echo 0)
@@ -424,6 +494,12 @@ if grep -q 'loadc' /usr/lib/lua/luci/controller/adguardhome.lua 2>/dev/null; the
     log "  3) 手动验证: curl -fsSL '${RAW_BASE}/files/luci/controller/adguardhome.lua' | grep loadc"
 else
     log "  ✓ controller.lua 验证通过"
+fi
+if grep -q 'fetchBackups' /www/luci-static/resources/view/adguardhome/dashboard.js 2>/dev/null; then
+    log "  ✓ dashboard.js 验证通过（含备份管理）"
+else
+    log "⚠ 警告: dashboard.js 缺少备份管理功能（可能是代理缓存的旧版本）"
+    log "  手动重拉: curl -fsSL '${RAW_BASE}/files/view/dashboard.js' -o /www/luci-static/resources/view/adguardhome/dashboard.js"
 fi
 
 rm -rf "$TMPDIR"

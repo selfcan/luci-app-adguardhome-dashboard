@@ -168,7 +168,8 @@ function _themeStyles() {
         logBg: dark ? '#0d1117' : '#1e1e1e',
         logColor: '#d4d4d4',
         tableStripe: dark ? 'rgba(255,255,255,0.03)' : 'transparent',
-        linkColor: dark ? '#58a6ff' : '#007bff'
+        linkColor: dark ? '#58a6ff' : '#007bff',
+        mutedColor: dark ? 'rgba(255,255,255,0.55)' : '#888'
     };
 }
 

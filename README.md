@@ -18,7 +18,7 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardho
 安装脚本分两步执行：
 
 1. **AdGuard Home 核心** — 检测 `/opt/AdGuardHome/AdGuardHome` 是否已安装，未安装则调用官方脚本自动安装；已安装则可选择覆盖安装（自动停止运行中的服务）或跳过
-2. **LuCI Dashboard** — 从 GitHub 下载菜单注册、Lua Controller、JS View、翻译等文件到临时目录，部署到系统对应位置
+2. **LuCI Dashboard** — 从 GitHub 下载菜单注册、Lua Controller、JS View、翻译等文件及 `checksums.sha256` 到临时目录，先做 **sha256 内容指纹校验**（命中代理缓存旧版立即中止并提示换代理），再部署到系统对应位置
 
 > install.sh 在覆盖前会自动把现有的 6 个面板文件备份到 `/root/agh_backup_install_<ts>/`，并在备份目录内生成 `restore.sh`。万一安装失败或想回滚到旧版面板，执行 `sh /root/agh_backup_install_<ts>/restore.sh` 即可（仅恢复面板文件，不动 AGH 核心二进制）。
 
@@ -74,7 +74,7 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardho
 - **代理延迟测试**：单点测试 / 批量测试所有候选，测试目标与实际下载域名一致（`raw.githubusercontent.com`），先持久化再测试
 - **面板自升级**：检查面板版本（读 `manifest.json`） → 一键升级（在线下载 6 个面板文件覆盖本地），无需手动上传
 - **两阶段提交 + 自动回滚**：核心升级和面板升级都采用「下载到临时目录 + 完整性校验 → 备份 + 原子 mv 覆盖」模式，任一步骤失败自动从备份还原已部署文件
-- **完整性校验**：lmo 校验 magic `LMO\0`、lua 校验含 `function`、js 校验含 `view.extend`、po 校验含 `msgid`，防止空文件 / 404 HTML / 截断的 .lmo 覆盖到目标
+- **完整性校验（双重防线）**：① 类型校验 lmo magic `LMO\0` / lua 含 `function` / js 含 `view.extend` / po 含 `msgid`，防止空文件 / 404 HTML / 截断；② **sha256 内容指纹**：install 与面板升级都先下载 `checksums.sha256`，对 6 个面板文件逐一比对 sha256，任何与发布清单不一致的内容（尤其是代理/CDN 缓存的旧版本）都会被拦截并中止升级，避免装上残缺面板
 - **备份管理**：列出 `/root/agh_backup_*` 所有备份目录（install/core/dashboard 三类），显示类型/时间戳/文件数/大小/含核心/含 restore.sh；支持一键恢复（仅 install/dashboard 类备份有 restore.sh）、显示恢复命令、删除备份释放空间
 - **install 自带备份**：install.sh 部署前自动备份现有 6 个面板文件 + 生成 restore.sh，与面板升级的备份机制完全一致
 - **国际化支持**：中英文自动切换，基于 LuCI 系统语言设置（124 条翻译）
@@ -105,6 +105,7 @@ luci-app-adguardhome-dashboard/
 │       └── dashboard.js  # LuCI 2.0 JS View (view.extend)
 ├── tools/
 │   └── po2lmo.py         # .po → .lmo 编译工具（开发用，不部署到路由器）
+├── checksums.sha256      # 发布用 sha256 清单（install / 面板升级的内容指纹来源）
 ├── manifest.json         # 包清单（面板自升级版本号来源）
 └── README.md             # 项目说明
 ```
@@ -154,15 +155,49 @@ luci-app-adguardhome-dashboard/
 
 ```
 阶段1: 6 个文件全部下载到 /tmp/agh_dash_new_<ts>/ + 完整性校验
+       ├─ 先下载 checksums.sha256（内容指纹清单，来自 GitHub main）
+       ├─ 每个文件 sha256 比对（与发布清单一致才放行；代理缓存旧版会被直接拦下）
        ├─ lmo: 校验尾字节 magic 4c4d6f00 (LMO\0)
-       ├─ lua: 校验含 'function'
-       ├─ js:  校验含 'view.extend'
+       ├─ lua: 校验含 'function' + 'list_backups'
+       ├─ js:  校验含 'view.extend' + 'fetchBackups'
        └─ po:  校验含 'msgid'
-       任一失败 → 写 FAILED 标记 → 不动任何目标文件
+       任一失败 → 写 FAILED 标记 + 自动回滚 → 不动任何目标文件
 阶段2: 逐文件备份 + mv 原子覆盖
        任一失败 → 从 /root/agh_backup_dashboard_<ts>/ 还原已部署的 → 写 FAILED 标记
 阶段2.5: 在备份目录生成 restore.sh（与 install.sh restore 逻辑一致，恢复 6 个面板文件）
 阶段3: 清 LuCI 缓存 + 重启 rpcd/uhttpd → 写 done 标记
+```
+
+---
+
+## 代理缓存与内容指纹校验 / Proxy Cache & Content Fingerprint
+
+GitHub 镜像/CDN（如 `ghfast.top`、`gh-proxy.com`）会对 `raw.githubusercontent.com` 的内容做缓存，且往往忽略 `?_cb=` 时间戳参数。如果缓存里是**更早、缺少某些功能的旧版本**，安装/升级会静默装上残缺面板（本项目曾因此导致「备份管理」与「清空日志」按钮不显示）。
+
+为彻底防住这类问题，install 与面板升级都采用 **双重校验**：
+
+1. **sha256 内容指纹（主防线）**：先从 GitHub main 下载 `checksums.sha256`（记录 6 个面板文件的 sha256），再对下载到的每个文件逐一比对 sha256。任何与发布清单不一致的内容（含代理缓存旧版、截断、被替换）都会**立即中止并提示换代理**，不会装上残缺面板。
+2. **语义特征（兜底防线）**：当 `checksums.sha256` 因网络等原因不可用时，降级为关键字校验 —— `dashboard.js` 必须含 `fetchBackups`、`adguardhome.lua` 必须含 `list_backups`。
+
+### 本地验证已部署面板是否为最新版
+
+```sh
+# 路由器上：面板 JS 是否含备份管理（返回 >0 即正常）
+grep -c fetchBackups /www/luci-static/resources/view/adguardhome/dashboard.js
+
+# 仓库内：用发布清单校验本地文件（全部 OK 即与发布一致）
+sha256sum -c checksums.sha256
+```
+
+### 安装/升级时命中旧版本怎么办
+
+安装日志会出现 `sha256 不匹配` / `内容校验失败`，并提示更换代理：
+
+```sh
+# 换用其它代理后重跑
+GITHUB_PROXY=https://kkgithub.com/ sh -c "$(curl -fsSL https://kkgithub.com/https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
+# 或直接直连 raw.githubusercontent.com（绕过镜像缓存）
+curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/files/view/dashboard.js -o /www/luci-static/resources/view/adguardhome/dashboard.js
 ```
 
 ---
@@ -270,8 +305,19 @@ python3 tools/po2lmo.py files/luci/i18n/adguardhome.zh-cn.po files/luci/i18n/adg
 
 1. 修改 `files/` 下的源文件
 2. 重新编译 `.po` → `.lmo`
-3. 在 `manifest.json` 中按语义化版本 bump `version` 字段（同时核对 `adguardhome.lua` 中 `DASHBOARD_VERSION` 常量保持一致）
-4. `git add files/ manifest.json && git commit -m "bump dashboard to x.y.z" && git push origin main`
+3. **重新生成内容指纹清单**（任何对 `files/` 下文件的改动都必须执行，否则 install/面板升级会判定 sha256 不匹配而中止）：
+   ```sh
+   sha256sum files/luci/controller/adguardhome.lua \
+             files/luci/menu.d/luci-app-adguardhome-dashboard.json \
+             files/luci/acl.json \
+             files/view/dashboard.js \
+             files/luci/i18n/adguardhome.lmo \
+             files/luci/i18n/adguardhome.zh-cn.lmo \
+             files/luci/i18n/adguardhome.po \
+             files/luci/i18n/adguardhome.zh-cn.po > checksums.sha256
+   ```
+4. 在 `manifest.json` 中按语义化版本 bump `version` 字段（同时核对 `adguardhome.lua` 中 `DASHBOARD_VERSION` 常量保持一致）
+5. `git add files/ checksums.sha256 manifest.json && git commit -m "bump dashboard to x.y.z" && git push origin main`
 
 推到 main 后，所有路由器上点「检查面板更新」即可看到新版本并在线升级。
 
