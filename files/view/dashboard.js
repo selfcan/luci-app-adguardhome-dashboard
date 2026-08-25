@@ -90,19 +90,53 @@ var _EN = {
     '面板升级任务启动失败': 'Dashboard upgrade failed to start',
     '面板升级完成，正在刷新页面': 'Dashboard upgrade completed, refreshing page',
     '面板升级失败，已自动回滚；请检查日志与代理设置': 'Dashboard upgrade failed and auto-rolled back; please check logs and proxy settings',
-    '升级失败，已自动回滚；请检查日志与代理设置': 'Upgrade failed and auto-rolled back; please check logs and proxy settings'
+    '升级失败，已自动回滚；请检查日志与代理设置': 'Upgrade failed and auto-rolled back; please check logs and proxy settings',
+    '备份管理': 'Backup Management',
+    '刷新备份': 'Refresh Backups',
+    '列出 /root/agh_backup_* 备份目录，可恢复或删除': 'List /root/agh_backup_* backup directories, can restore or delete',
+    '点击「刷新备份」加载列表': 'Click "Refresh Backups" to load list',
+    '加载中...': 'Loading...',
+    '加载失败': 'Load failed',
+    '暂无备份目录（/root/agh_backup_*）': 'No backup directories (/root/agh_backup_*)',
+    '类型': 'Type',
+    '时间戳': 'Timestamp',
+    '文件数': 'Files',
+    '大小': 'Size',
+    '含核心': 'Has Core',
+    '操作': 'Actions',
+    '安装': 'Install',
+    '核心升级': 'Core Upgrade',
+    '面板升级': 'Dashboard Upgrade',
+    '恢复': 'Restore',
+    '命令': 'Cmd',
+    '删除': 'Delete',
+    '是': 'Yes',
+    '否': 'No',
+    '恢复命令（在路由器 SSH 执行）：': 'Restore command (run on router via SSH):',
+    '提示：也可点击「恢复」让面板自动后台执行': 'Tip: Or click "Restore" to let dashboard run it in background',
+    '确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。': 'Confirm restore from backup? Current files will be overwritten, page will refresh after restore.',
+    '恢复中，请稍候...': 'Restoring, please wait...',
+    '恢复失败，请查看日志': 'Restore failed, please check logs',
+    '恢复失败': 'Restore failed',
+    '确定删除此备份吗？此操作不可撤销。': 'Confirm delete this backup? This action cannot be undone.',
+    '删除失败': 'Delete failed',
+    '网络错误': 'Network error'
 };
 
+var _ZH_CACHE = null;  // _isChinese 结果缓存，页面生命周期内不用重复检测
 function _isChinese() {
+    if (_ZH_CACHE !== null) return _ZH_CACHE;
+    var isZh = true;
     try {
         var lang = (L.env && (L.env.locale || L.env.language)) || '';
-        if (lang) return lang.indexOf('zh') !== -1;
+        if (lang) { isZh = (lang.indexOf('zh') !== -1); _ZH_CACHE = isZh; return isZh; }
     } catch(e) {}
     try {
         var h = document.documentElement.lang || navigator.language || '';
-        return h.indexOf('zh') !== -1;
+        isZh = (h.indexOf('zh') !== -1);
     } catch(e) {}
-    return true;
+    _ZH_CACHE = isZh;
+    return isZh;
 }
 
 function T(s) {
@@ -163,11 +197,130 @@ return view.extend({
     proxyGlobalTestBtn: null,
     proxyBusy: false,
 
+    /* 客户端防抖（防止用户连点 start/stop/restart/upgrade 等按钮产生重复请求） */
+    _actionBusy: false,
+
     /* ── 面板升级组件 ── */
     dashCurrVerEl: null,
     dashLatestVerEl: null,
     dashCheckBtn: null,
     dashUpgradeBtn: null,
+
+    /* ── 备份管理组件 ── */
+    backupsListEl: null,
+
+    fetchBackups: function() {
+        var self = this;
+        if (this.backupsListEl) {
+            this.backupsListEl.innerHTML = '';
+            this.backupsListEl.appendChild(E('div', { style: 'color:' + (this.theme ? this.theme.mutedColor : '#888') }, T('加载中...')));
+        }
+        return request.get(L.url('admin/services/adguardhome/backups')).then(function(res) {
+            return res.json();
+        }).then(function(d) {
+            self.renderBackups((d && d.backups) || []);
+        }).catch(function() {
+            if (self.backupsListEl) self.backupsListEl.textContent = T('加载失败');
+        });
+    },
+
+    renderBackups: function(backups) {
+        var self = this;
+        var el = this.backupsListEl;
+        if (!el) return;
+        el.innerHTML = '';
+        if (!backups || !backups.length) {
+            el.appendChild(E('div', { style: 'padding:10px;color:#888' }, T('暂无备份目录（/root/agh_backup_*）')));
+            return;
+        }
+        var table = E('table', { class: 'table cbi-section-table', style: 'width:100%;font-size:12px' }, [
+            E('tr', { class: 'tr' }, [
+                E('th', { class: 'th', style: 'width:18%' }, T('类型')),
+                E('th', { class: 'th', style: 'width:20%' }, T('时间戳')),
+                E('th', { class: 'th', style: 'width:12%' }, T('文件数')),
+                E('th', { class: 'th', style: 'width:10%' }, T('大小')),
+                E('th', { class: 'th', style: 'width:12%' }, T('含核心')),
+                E('th', { class: 'th', style: 'width:28%' }, T('操作'))
+            ])
+        ]);
+        backups.forEach(function(b) {
+            var typeMap = { install: T('安装'), core: T('核心升级'), dashboard: T('面板升级'), unknown: T('未知') };
+            var tr = E('tr', { class: 'tr' }, [
+                E('td', { class: 'td' }, typeMap[b.type] || b.type),
+                E('td', { class: 'td', style: 'font-family:monospace' }, b.timestamp || '—'),
+                E('td', { class: 'td' }, String(b.file_count || 0)),
+                E('td', { class: 'td' }, b.size || '?'),
+                E('td', { class: 'td' }, b.has_core ? T('是') : T('否')),
+                E('td', { class: 'td' }, (function() {
+                    var td = E('td', { class: 'td' });
+                    if (b.has_restore) {
+                        td.appendChild(E('button', {
+                            class: 'btn cbi-button cbi-button-action',
+                            style: 'margin-right:5px',
+                            click: function() { self.confirmRestore(b.dir, b.name); }
+                        }, T('恢复')));
+                    }
+                    td.appendChild(E('button', {
+                        class: 'btn cbi-button cbi-button-neutral',
+                        style: 'margin-right:5px',
+                        click: function() { self.showRestoreCmd(b.dir); }
+                    }, T('命令')));
+                    td.appendChild(E('button', {
+                        class: 'btn cbi-button cbi-button-negative',
+                        click: function() { self.confirmDelete(b.dir, b.name); }
+                    }, T('删除')));
+                    return td;
+                })())
+            ]);
+            table.appendChild(tr);
+        });
+        el.appendChild(table);
+    },
+
+    showRestoreCmd: function(dir) {
+        var cmd = 'sh ' + dir + '/restore.sh';
+        var box = E('div', { style: 'padding:10px;background:#f5f5f5;border:1px solid #ddd;border-radius:4px;font-family:monospace;word-break:break-all;margin-top:8px' }, [
+            E('strong', {}, T('恢复命令（在路由器 SSH 执行）：')),
+            E('pre', { style: 'margin:5px 0;white-space:pre-wrap' }, cmd),
+            E('div', { style: 'font-size:11px;color:#888;margin-top:5px' }, T('提示：也可点击「恢复」让面板自动后台执行'))
+        ]);
+        if (this.backupsListEl) {
+            var prev = this.backupsListEl.querySelector('.restore-cmd-box');
+            if (prev) prev.remove();
+            box.classList.add('restore-cmd-box');
+            this.backupsListEl.appendChild(box);
+        }
+    },
+
+    confirmRestore: function(dir, name) {
+        var self = this;
+        if (!window.confirm(T('确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。') + '\n\n' + dir)) return;
+        request.post(L.url('admin/services/adguardhome/restore_backup'), { dir: dir }).then(function(res) {
+            return res.json();
+        }).then(function(d) {
+            if (d && d.success) {
+                if (self.backupsListEl) self.backupsListEl.appendChild(E('div', { style: 'padding:8px;color:#2dca73' }, T('恢复中，请稍候...')));
+                /* startLogPolling 统一处理恢复完成检测（=== Restore from /root/agh_backup / 恢复完成）+ 页面刷新 */
+                self.startLogPolling();
+            } else {
+                alert((d && d.error) || T('恢复失败'));
+            }
+        }).catch(function() { alert(T('网络错误')); });
+    },
+
+    confirmDelete: function(dir, name) {
+        var self = this;
+        if (!window.confirm(T('确定删除此备份吗？此操作不可撤销。') + '\n\n' + dir)) return;
+        request.post(L.url('admin/services/adguardhome/delete_backup'), { dir: dir }).then(function(res) {
+            return res.json();
+        }).then(function(d) {
+            if (d && d.success) {
+                self.fetchBackups();
+            } else {
+                alert((d && d.error) || T('删除失败'));
+            }
+        }).catch(function() { alert(T('网络错误')); });
+    },
 
     fetchStatus: function() {
         return request.get(L.url('admin/services/adguardhome/status')).then(function(res) {
@@ -402,6 +555,25 @@ return view.extend({
             click: function() { self.refreshLog(); }
         }, T('刷新日志'));
 
+        var clearLogBtn = E('button', {
+            class: 'btn cbi-button cbi-button-neutral',
+            style: 'margin:0 0 10px 8px',
+            click: function() { self.clearLog(); }
+        }, T('清空日志'));
+
+        var autoRefreshLogLabel = E('label', { style: 'margin:0 0 10px 12px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:4px' }, [
+            E('input', { type: 'checkbox', click: function(ev) { self.toggleAutoRefreshLog(ev.target.checked); } }),
+            T('自动刷新')
+        ]);
+
+        var backupsListEl = E('div', { style: 'font-size:12px;line-height:1.6;' }, T('点击「刷新备份」加载列表'));
+        this.backupsListEl = backupsListEl;
+
+        var refreshBackupsBtn = E('button', {
+            class: 'btn cbi-button cbi-button-action',
+            click: function() { self.fetchBackups(); }
+        }, T('刷新备份'));
+
         var node = E('div', { class: 'cbi-map' }, [
             E('h2', {}, T('AdGuard Home 控制中心')),
             E('div', { class: 'cbi-map-descr' }, T('实时状态监控 · 服务控制 · 日志查看 · 一键升级')),
@@ -493,6 +665,17 @@ return view.extend({
             ]),
 
             E('div', { class: 'cbi-section' }, [
+                E('h3', {}, T('备份管理')),
+                E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [
+                    E('div', { style: 'margin-bottom:12px;' }, [
+                        refreshBackupsBtn,
+                        E('span', { style: 'margin-left:10px; font-size:11px; color:' + theme.mutedColor }, T('列出 /root/agh_backup_* 备份目录，可恢复或删除'))
+                    ]),
+                    backupsListEl
+                ])
+            ]),
+
+            E('div', { class: 'cbi-section' }, [
                 E('h3', {}, T('版本更新')),
                 E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [
                     E('div', { style: 'margin-bottom:12px;' }, [
@@ -511,6 +694,8 @@ return view.extend({
                 E('h3', {}, T('日志查看器')),
                 E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [
                     refreshLogBtn,
+                    clearLogBtn,
+                    autoRefreshLogLabel,
                     logPre
                 ])
             ])
@@ -523,10 +708,11 @@ return view.extend({
         this.prefillProxy(status.proxy || '');
         this.bindProxyEvents();
 
-        // 自动触发核心与面板更新检查
+        // 自动触发核心与面板更新检查 + 加载备份列表
         setTimeout(function() {
             self.checkUpdate();
             self.checkDashboardUpdate();
+            self.fetchBackups();
         }, 1000);
 
         return node;
@@ -673,29 +859,27 @@ return view.extend({
         var self = this;
         if (this.proxyBusy) return;
         this.proxyBusy = true;
-        
+
         if (this.proxyGlobalTestBtn) {
             this.proxyGlobalTestBtn.disabled = true;
             this.proxyGlobalTestBtn.textContent = T('测试中...');
         }
 
         var items = this.proxyRadioEls || [];
-        var promises = [];
-
-        for (var i = 0; i < items.length; i++) {
-            promises.push(self.testProxyOne(items[i].proxy));
-        }
-
-        Promise.all(promises).then(function() {
-        }).catch(function(err) {
-            console.error('Proxy test all error:', err);
-        }).then(function() {
-            self.proxyBusy = false;
-            if (self.proxyGlobalTestBtn) {
-                self.proxyGlobalTestBtn.disabled = false;
-                self.proxyGlobalTestBtn.textContent = T('测试所有');
+        /* 串行：对性能弱的路由器更友好（避免同时 5 个 curl 阻塞 Lua 进程） */
+        (function run(i) {
+            if (i >= items.length) {
+                self.proxyBusy = false;
+                if (self.proxyGlobalTestBtn) self.proxyGlobalTestBtn.disabled = false;
+                if (self.proxyGlobalTestBtn) self.proxyGlobalTestBtn.textContent = T('测试所有');
+                return;
             }
-        });
+            self.testProxyOne(items[i].proxy).then(function() {
+                run(i + 1);
+            }).catch(function() {
+                run(i + 1);
+            });
+        })(0);
     },
 
     /* ── 面板自升级逻辑 ── */
@@ -753,26 +937,8 @@ return view.extend({
     },
 
     startDashboardPolling: function() {
-        var self = this;
+        /* startLogPolling 已统一处理 === dashboard upgrade done / FAILED 检测 + 页面刷新 + _autoRefreshPaused 恢复 */
         this.startLogPolling();
-        var count = 0;
-        var timer = setInterval(function() {
-            count++;
-            self.fetchLog().then(function(d) {
-                var c = (d && d.content) || '';
-                if (c.indexOf('dashboard upgrade done') !== -1 || c.indexOf('Dashboard upgrade done') !== -1) {
-                    clearInterval(timer);
-                    ui.addNotification(null, T('面板升级完成，正在刷新页面'), 'info');
-                    setTimeout(function() { 
-                        window.location.href = window.location.pathname + '?_t=' + new Date().getTime(); 
-                    }, 2000);
-                } else if (c.indexOf('dashboard upgrade FAILED') !== -1 || c.indexOf('Dashboard upgrade FAILED') !== -1) {
-                    clearInterval(timer);
-                    ui.addNotification(null, T('面板升级失败，已自动回滚；请检查日志与代理设置'), 'error');
-                }
-            }).catch(function() {});
-            if (count >= 90) clearInterval(timer);
-        }, 2000);
     },
 
     startPolling: function() {
@@ -806,9 +972,45 @@ return view.extend({
         });
     },
 
+    clearLog: function() {
+        var self = this;
+        request.post(L.url('admin/services/adguardhome/clear_log')).then(function(res) {
+            return res.json();
+        }).then(function(d) {
+            if (d && d.success) {
+                /* 清空后重新拉取：此时 EXEC_LOG 已空，仅显示运行日志 */
+                self.refreshLog();
+            } else {
+                alert((d && d.error) || T('清空失败'));
+            }
+        }).catch(function() { alert(T('网络错误')); });
+    },
+
+    autoRefreshLogInterval: null,
+    _autoRefreshPaused: false,
+    toggleAutoRefreshLog: function(enabled) {
+        var self = this;
+        if (this.autoRefreshLogInterval) {
+            clearInterval(this.autoRefreshLogInterval);
+            this.autoRefreshLogInterval = null;
+        }
+        if (enabled) {
+            /* 自动刷新：3 秒间隔（与升级时的 2 秒轮询区分，避免冲突） */
+            this.autoRefreshLogInterval = setInterval(function() {
+                /* 升级进行中时自动暂停（logPollInterval 已在工作），避免重复请求/覆盖升级通知 */
+                if (self.logPollInterval) return;
+                if (self._autoRefreshPaused) return;
+                self.refreshLog();
+            }, 3000);
+        }
+    },
+
     startLogPolling: function() {
         var self = this;
         if (this.logPollInterval) clearInterval(this.logPollInterval);
+        /* 升级开始：临时暂停自动刷新，等升级结束再恢复，避免两个定时器同时拉日志 */
+        var wasAuto = !!this.autoRefreshLogInterval;
+        if (wasAuto) this._autoRefreshPaused = true;
         var pollCount = 0;
         this.logPollInterval = setInterval(function() {
             pollCount++;
@@ -819,31 +1021,45 @@ return view.extend({
                 }
                 if (data && data.content) {
                     var c = data.content;
+                    var done = false;
                     if (c.indexOf('FAILED') !== -1) {
-                        clearInterval(self.logPollInterval);
-                        self.logPollInterval = null;
+                        done = true;
                         ui.addNotification(null, T('升级失败，已自动回滚；请检查日志与代理设置'), 'error');
-                    } else if (c.indexOf('done') !== -1 || c.indexOf('installed') !== -1 || c.indexOf('completed') !== -1) {
-                        clearInterval(self.logPollInterval);
-                        self.logPollInterval = null;
+                    } else if (c.indexOf('=== core upgrade done') !== -1
+                            || c.indexOf('=== dashboard upgrade done') !== -1
+                            || c.indexOf('=== core install done') !== -1
+                            || c.indexOf('=== Reinstall done') !== -1
+                            || c.indexOf('=== Restore from /root/agh_backup') !== -1
+                            || c.indexOf('恢复完成（仅面板文件') !== -1) {
+                        done = true;
                         ui.addNotification(null, T('升级完成，正在刷新页面...'), 'info');
                         setTimeout(function() {
                             window.location.href = window.location.pathname + '?_t=' + new Date().getTime();
                         }, 2000);
+                    }
+                    if (done) {
+                        clearInterval(self.logPollInterval);
+                        self.logPollInterval = null;
+                        /* 升级结束：恢复用户之前开启的自动刷新 */
+                        self._autoRefreshPaused = false;
                     }
                 }
             }).catch(function() {});
             if (pollCount >= 150) {
                 clearInterval(self.logPollInterval);
                 self.logPollInterval = null;
+                self._autoRefreshPaused = false;
             }
         }, 2000);
     },
 
     execAction: function(action) {
         var self = this;
+        if (this._actionBusy) return;   // 防抖：快速连点忽略
+        this._actionBusy = true;
         ui.showModal(E('h4', {}, T('执行中...')), [E('p', { class: 'spinning' }, action)]);
         this.sendAction(action).then(function(res) {
+            self._actionBusy = false;
             ui.hideModal();
             if (res && res.success) {
                 ui.addNotification(null, T('操作执行成功'), 'info');
@@ -855,6 +1071,7 @@ return view.extend({
                 ui.addNotification(null, T('操作失败: ') + msg, 'error');
             }
         }).catch(function(err) {
+            self._actionBusy = false;
             ui.hideModal();
             ui.addNotification(null, T('执行异常: ') + (err.message || err), 'error');
         });

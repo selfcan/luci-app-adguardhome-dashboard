@@ -22,11 +22,8 @@ log() {
 }
 
 _now_ms() {
-    local t=$(date +%s%N 2>/dev/null)
-    case "$t" in
-        *N) echo $(( $(date +%s) * 1000 )) ;;
-        *)  echo $(( t / 1000000 )) ;;
-    esac
+    # BusyBox date 不支持 %N 纳秒，直接用秒 × 1000（粒度 1s 足够代理延迟显示，且跨平台兼容）
+    echo $(( $(date +%s 2>/dev/null || echo 0) * 1000 ))
 }
 _elapsed_ms() { echo $(( $(_now_ms) - $1 )); }
 
@@ -37,6 +34,9 @@ echo "========================================================="
 echo ""
 
 # ── GitHub 连通性检测 & 代理选择 ────────────────────
+# 测试目标与实际下载用的域名一致：raw.githubusercontent.com
+TEST_URL="https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/README.md"
+
 PROXY_PREFIX=""
 
 if [ -n "$GITHUB_PROXY" ]; then
@@ -45,19 +45,22 @@ if [ -n "$GITHUB_PROXY" ]; then
 else
     log "检测 GitHub 连通性..."
     _t0=$(_now_ms)
-    if curl -fsSL -m 10 -o /dev/null 'https://api.github.com' 2>/dev/null; then
+    if curl -fsSL -m 10 -o /dev/null "$TEST_URL" 2>/dev/null; then
         log "GitHub 直连正常 ($(_elapsed_ms $_t0)ms)"
     else
         log "GitHub 直连失败，正在测试代理节点..."
 
-        _proxy_results=""
+        # 用临时文件记录每个代理的测试结果（path|status|ms），避免脆弱的字符串解析
+        _results_file=$(mktemp 2>/dev/null || echo "/tmp/agh_proxy_results_$$")
+        : > "$_results_file"
+
         for proxy in $PROXY_LIST; do
-            _test_url="${proxy}https://api.github.com"
+            _test_url="${proxy}${TEST_URL}"
             _t1=$(_now_ms)
             if curl -fsSL -m 10 -o /dev/null "$_test_url" 2>/dev/null; then
-                _proxy_results="$_proxy_results ok:$(_elapsed_ms $_t1)"
+                echo "${proxy}|ok|$(_elapsed_ms $_t1)" >> "$_results_file"
             else
-                _proxy_results="$_proxy_results fail:0"
+                echo "${proxy}|fail|0" >> "$_results_file"
             fi
         done
 
@@ -67,20 +70,16 @@ else
         echo "  1)  直连              ✗ 不可用"
 
         _idx=2
-        _r_iter="$_proxy_results"
-        for proxy in $PROXY_LIST; do
-            _domain=$(echo "$proxy" | sed 's|https\{0,1\}://||;s|/$||')
-            _result=$(echo "$_r_iter" | awk '{print $1}')
-            _r_iter=$(echo "$_r_iter" | awk '{$1=""; print}' | sed 's/^ //')
-            _status=$(echo "$_result" | cut -d: -f1)
-            _ms=$(echo "$_result" | cut -d: -f2)
-            if [ "$_status" = "ok" ]; then
+        while IFS='|' read -r _p _s _ms; do
+            [ -z "$_p" ] && continue
+            _domain=$(echo "$_p" | sed 's|https\{0,1\}://||;s|/$||')
+            if [ "$_s" = "ok" ]; then
                 printf "  %d)  %-18s ✓ %sms\n" "$_idx" "$_domain" "$_ms"
             else
                 printf "  %d)  %-18s ✗ 超时\n" "$_idx" "$_domain"
             fi
             _idx=$((_idx + 1))
-        done
+        done < "$_results_file"
 
         CUSTOM_OPT=$_idx
         echo "  ${CUSTOM_OPT})  自定义代理 URL"
@@ -102,19 +101,22 @@ else
             log "使用自定义代理: $PROXY_PREFIX"
         elif [ "$PROXY_CHOICE" != "1" ]; then
             _i=1
-            for proxy in $PROXY_LIST; do
-                if [ "$_i" = "$((PROXY_CHOICE - 1))" ]; then
-                    PROXY_PREFIX="$proxy"
+            _picked=""
+            while IFS='|' read -r _p _s _ms; do
+                if [ "$_i" = "$((PROXY_CHOICE - 1))" ] && [ "$_s" = "ok" ]; then
+                    PROXY_PREFIX="$_p"
+                    _picked="yes"
                     break
                 fi
                 _i=$((_i + 1))
-            done
-            if [ -n "$PROXY_PREFIX" ]; then
+            done < "$_results_file"
+            if [ -n "$PROXY_PREFIX" ] && [ "$_picked" = "yes" ]; then
                 log "使用代理: $PROXY_PREFIX"
             else
-                log "无效选择，使用直连"
+                log "无效选择或该节点不可用，使用直连"
             fi
         fi
+        rm -f "$_results_file" 2>/dev/null
     fi
 fi
 
@@ -287,6 +289,86 @@ else
     download_from_github
 fi
 
+# ── 备份当前安装的文件（与面板升级的两阶段提交保持一致）────────────
+TS=$(date '+%Y%m%d_%H%M%S' 2>/dev/null || date +%s 2>/dev/null || echo 0)
+BACKUP_DIR="/root/agh_backup_install_${TS}"
+
+# 备份目标：与下面清理/部署完全对应的现有文件
+BACKUP_PAIRS="
+/usr/lib/lua/luci/controller/adguardhome.lua|controller/adguardhome.lua
+/usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json|menu.d/luci-app-adguardhome-dashboard.json
+/usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json|acl.d/luci-app-adguardhome-dashboard.json
+/usr/lib/lua/luci/i18n/adguardhome.lmo|i18n/adguardhome.lmo
+/usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo|i18n/adguardhome.zh-cn.lmo
+/www/luci-static/resources/view/adguardhome/dashboard.js|view/adguardhome/dashboard.js
+"
+
+_backup_count=0
+for pair in $BACKUP_PAIRS; do
+    src=$(echo "$pair" | cut -d'|' -f1)
+    rel=$(echo "$pair" | cut -d'|' -f2)
+    if [ -f "$src" ]; then
+        mkdir -p "$BACKUP_DIR/$(dirname "$rel")"
+        cp -a "$src" "$BACKUP_DIR/$rel" 2>/dev/null || cp "$src" "$BACKUP_DIR/$rel"
+        _backup_count=$((_backup_count + 1))
+        log "  备份: $src  ->  $BACKUP_DIR/$rel"
+    fi
+done
+
+# 注意：install 不备份 AdGuardHome 核心二进制，核心安装/升级的回滚由 AGH 官方安装脚本和核心升级流程单独管理
+
+if [ "$_backup_count" -gt 0 ]; then
+    log "本次备份 $_backup_count 个面板文件至: $BACKUP_DIR"
+
+    # 生成 restore.sh：用户可一键恢复到本次安装前的状态（仅面板文件，不含 AGH 核心）
+    cat > "$BACKUP_DIR/restore.sh" <<EOF
+#!/bin/sh
+# 一键恢复 LuCI Dashboard 到 $(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null) 安装前的状态
+# 备份目录: $BACKUP_DIR
+# 仅恢复面板文件，不涉及 AdGuardHome 核心二进制
+set -u
+BACKUP_DIR='$BACKUP_DIR'
+
+restore_one() {
+    r_rel="\$1"
+    r_dst="\$2"
+    r_src="\$BACKUP_DIR/\$r_rel"
+    if [ -f "\$r_src" ]; then
+        mkdir -p "\$(dirname "\$r_dst")"
+        cp -a "\$r_src" "\$r_dst" 2>/dev/null || cp "\$r_src" "\$r_dst"
+        chmod 644 "\$r_dst" 2>/dev/null
+        echo "  restored: \$r_dst"
+    else
+        echo "  (skip) no backup: \$r_rel"
+    fi
+}
+
+echo "=== 从 \$BACKUP_DIR 恢复 LuCI Dashboard ==="
+
+echo ">> 恢复面板文件..."
+restore_one 'controller/adguardhome.lua'                                   '/usr/lib/lua/luci/controller/adguardhome.lua'
+restore_one 'menu.d/luci-app-adguardhome-dashboard.json'                  '/usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json'
+restore_one 'acl.d/luci-app-adguardhome-dashboard.json'                   '/usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json'
+restore_one 'i18n/adguardhome.lmo'                                         '/usr/lib/lua/luci/i18n/adguardhome.lmo'
+restore_one 'i18n/adguardhome.zh-cn.lmo'                                   '/usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo'
+restore_one 'view/adguardhome/dashboard.js'                                '/www/luci-static/resources/view/adguardhome/dashboard.js'
+
+echo ">> 清理缓存并重启服务..."
+rm -rf /tmp/luci-* 2>/dev/null
+rm -f /tmp/luci-indexcache.* /tmp/luci-modulecache.* 2>/dev/null
+find /tmp -name '*.luac' -delete 2>/dev/null
+/etc/init.d/rpcd restart 2>/dev/null
+/etc/init.d/uhttpd restart 2>/dev/null
+
+echo "=== 恢复完成（仅面板文件，AGH 核心未受影响）==="
+echo "请刷新浏览器查看效果。"
+EOF
+    chmod 755 "$BACKUP_DIR/restore.sh" 2>/dev/null
+    log "恢复脚本已生成: $BACKUP_DIR/restore.sh"
+else
+    log "本次安装为全新部署，无旧文件可备份"
+fi
+
 # ── 清理旧版本文件 ──────────────────────────────────
 log "清理旧版本文件..."
 rm -f /usr/lib/lua/luci/controller/adguardhome.lua
@@ -360,6 +442,18 @@ echo "   ACL:         /usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json"
 echo "   JS View:     /www/luci-static/resources/view/adguardhome/dashboard.js"
 echo "   i18n (en):   /usr/lib/lua/luci/i18n/adguardhome.lmo"
 echo "   i18n (zh):   /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo"
+echo ""
+if [ "$_backup_count" -gt 0 ] 2>/dev/null; then
+    echo " 备份信息:"
+    echo "   备份目录:   $BACKUP_DIR"
+    echo "   备份文件数: $_backup_count"
+    echo "   恢复脚本:   $BACKUP_DIR/restore.sh"
+    echo ""
+    echo "   恢复到安装前状态:"
+    echo "     sh $BACKUP_DIR/restore.sh"
+    echo ""
+    echo "   或在面板 → 服务 → AdGuard Home → 备份管理 中操作"
+fi
 echo ""
 echo " 请刷新浏览器 → LuCI → 服务 → AdGuard Home"
 echo "========================================================="

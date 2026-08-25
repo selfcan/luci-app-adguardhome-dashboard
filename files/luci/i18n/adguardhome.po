@@ -272,3 +272,102 @@ msgstr "Dashboard upgrade failed and auto-rolled back; please check logs and pro
 
 msgid "升级失败，已自动回滚；请检查日志与代理设置"
 msgstr "Upgrade failed and auto-rolled back; please check logs and proxy settings"
+
+msgid "备份管理"
+msgstr "备份管理"
+
+msgid "刷新备份"
+msgstr "刷新备份"
+
+msgid "列出 /root/agh_backup_* 备份目录，可恢复或删除"
+msgstr "列出 /root/agh_backup_* 备份目录，可恢复或删除"
+
+msgid "点击「刷新备份」加载列表"
+msgstr "点击「刷新备份」加载列表"
+
+msgid "加载中..."
+msgstr "加载中..."
+
+msgid "加载失败"
+msgstr "加载失败"
+
+msgid "暂无备份目录（/root/agh_backup_*）"
+msgstr "暂无备份目录（/root/agh_backup_*）"
+
+msgid "类型"
+msgstr "类型"
+
+msgid "时间戳"
+msgstr "时间戳"
+
+msgid "文件数"
+msgstr "文件数"
+
+msgid "大小"
+msgstr "大小"
+
+msgid "含核心"
+msgstr "含核心"
+
+msgid "操作"
+msgstr "操作"
+
+msgid "安装"
+msgstr "安装"
+
+msgid "核心升级"
+msgstr "核心升级"
+
+msgid "面板升级"
+msgstr "面板升级"
+
+msgid "恢复"
+msgstr "恢复"
+
+msgid "命令"
+msgstr "命令"
+
+msgid "删除"
+msgstr "删除"
+
+msgid "是"
+msgstr "是"
+
+msgid "否"
+msgstr "否"
+
+msgid "恢复命令（在路由器 SSH 执行）："
+msgstr "恢复命令（在路由器 SSH 执行）："
+
+msgid "提示：也可点击「恢复」让面板自动后台执行"
+msgstr "提示：也可点击「恢复」让面板自动后台执行"
+
+msgid "确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。"
+msgstr "确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。"
+
+msgid "恢复中，请稍候..."
+msgstr "恢复中，请稍候..."
+
+msgid "恢复失败，请查看日志"
+msgstr "恢复失败，请查看日志"
+
+msgid "恢复失败"
+msgstr "恢复失败"
+
+msgid "确定删除此备份吗？此操作不可撤销。"
+msgstr "确定删除此备份吗？此操作不可撤销。"
+
+msgid "删除失败"
+msgstr "删除失败"
+
+msgid "网络错误"
+msgstr "网络错误"
+
+msgid "清空日志"
+msgstr "清空日志"
+
+msgid "自动刷新"
+msgstr "自动刷新"
+
+msgid "清空失败"
+msgstr "清空失败"

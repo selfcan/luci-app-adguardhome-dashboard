@@ -24,7 +24,7 @@ local CONFIG_PATHS = {
 -- 统一运行时日志路径（挂载于 /tmp tmpfs 内存文件系统）
 local EXEC_LOG = "/tmp/agh_exec.log"
 local PROXY_CONF = "/etc/adguardhome-dashboard.proxy"
-local DASHBOARD_VERSION = "2.2.0"
+local DASHBOARD_VERSION = "2.3.0"
 local DASH_REPO = "imonior/luci-app-adguardhome-dashboard"
 local DASH_BRANCH = "main"
 
@@ -80,12 +80,26 @@ local function is_safe_proxy(p)
     return true
 end
 
-local function try_with_proxies(url)
+local function try_with_proxies(url, expect_json)
+    local expect = expect_json or false   -- true = 必须是合法 JSON（非 HTML/404 页）
     local tried = {}
     local function attempt(target, timeout)
         local out = util.exec("curl -m " .. timeout .. " -fsSL '" .. target .. "' 2>/dev/null")
-        if out and #out > 10 then return out end
-        return nil
+        if not out or #out < 10 then return nil end
+        -- 过滤掉 GitHub 返回的 403/404 HTML 错误页（curl -f 应该拦截但某些代理会篡改响应码）
+        if out:find("^<!DOCTYPE HTML", 1, true)
+            or out:find("^<!doctype html", 1, true)
+            or out:find("^<html", 1, true)
+            or out:find("<title>403</title>", 1, true)
+            or out:find("<title>404</title>", 1, true) then
+            return nil
+        end
+        if expect then
+            -- JSON 健壮性：以 { 或 [ 开头，至少包含一个 "key" : 形式或纯数组内容
+            local s = out:gsub("^%s+", ""):gsub("%s+$", "")
+            if not (s:sub(1, 1) == '{' or s:sub(1, 1) == '[') then return nil end
+        end
+        return out
     end
     if PRIMARY_PROXY ~= "" then
         local r = attempt(PRIMARY_PROXY .. url, 10)
@@ -137,7 +151,11 @@ function index()
     entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"), nil, true)
     entry({"admin", "services", "adguardhome", "check_dashboard_update"}, call("check_dashboard_update"), nil, true)
     entry({"admin", "services", "adguardhome", "upgrade_dashboard"}, call("do_upgrade_dashboard"), nil, true)
+    entry({"admin", "services", "adguardhome", "backups"}, call("list_backups"), nil, true)
+    entry({"admin", "services", "adguardhome", "restore_backup"}, call("restore_backup"), nil, true)
+    entry({"admin", "services", "adguardhome", "delete_backup"}, call("delete_backup"), nil, true)
     entry({"admin", "services", "adguardhome", "log"}, call("get_log"), nil, true)
+    entry({"admin", "services", "adguardhome", "clear_log"}, call("clear_log"), nil, true)
 end
 
 function get_status()
@@ -191,9 +209,15 @@ function get_status()
             if content then
                 local port = content:match("bind_port:%s*(%d+)")
                 if not port then
+                    -- 匹配 IPv4 + 端口 (0.0.0.0:3000 / 127.0.0.1:3000)
                     port = content:match("http:.-address:%s*[%d%.]+:(%d+)")
                 end
                 if not port then
+                    -- 匹配 IPv6 + 端口 ([::]:3000 / [::1]:3000 / [fd00::1]:3000)
+                    port = content:match("http:.-address:%s*%[[%x:]-%]:(%d+)")
+                end
+                if not port then
+                    -- 匹配无 IP，只写端口的情况 (:3000)
                     port = content:match("http:.-address:%s*:(%d+)")
                 end
                 if port then
@@ -276,7 +300,7 @@ end
 
 function check_update()
     load_proxies()
-    local output = try_with_proxies("https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest")
+    local output = try_with_proxies("https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest", true)
     local latest = ""
     if output and #output > 0 then
         latest = output:match('"tag_name"%s*:%s*"(.-)"') or ""
@@ -505,39 +529,53 @@ function proxy_test()
 end
 
 function get_log()
-    local content = ""
+    local log_body = ""
+    local exec_has_content = false
 
+    -- 1. 中间层：读取面板动作/升级过程日志 (EXEC_LOG)
     if fs.access(EXEC_LOG) then
         local data = fs.readfile(EXEC_LOG)
         if data and #data > 0 then
-            content = data
+            log_body = "=== 执行/升级日志 ===\n" .. data
+            exec_has_content = true
         end
     end
 
-    if content == "" then
-        local agh_logs = {
-            "/opt/AdGuardHome/data/agh.log",
-            "/var/log/AdGuardHome.log",
-            "/tmp/AdGuardHome.log"
-        }
-        for _, lf in ipairs(agh_logs) do
-            if fs.access(lf) then
-                local data = fs.readfile(lf)
-                if data and #data > 50 then
-                    content = data
-                    break
-                end
+    -- 2. 运行日志层：尝试 AdGuardHome 原生日志文件（截取尾部 100 行）
+    local run_log = ""
+    local agh_logs = {
+        "/opt/AdGuardHome/data/agh.log",
+        "/var/log/AdGuardHome.log",
+        "/tmp/AdGuardHome.log"
+    }
+    for _, lf in ipairs(agh_logs) do
+        if fs.access(lf) then
+            local data = fs.readfile(lf)
+            if data and #data > 50 then
+                run_log = util.exec("tail -n 100 '" .. lf .. "' 2>/dev/null") or data
+                break
             end
         end
     end
 
-    if content == "" then
-        content = util.exec("logread -e 'AdGuardHome' 2>/dev/null")
-    end
-    if not content or content == "" then
-        content = util.exec("logread 2>/dev/null | grep -i 'adguard'")
+    -- 3. 保底/混合层：无原生日志时从系统 logread 提取
+    if run_log == "" then
+        run_log = util.exec("logread -e 'AdGuardHome' 2>/dev/null | tail -n 50") or ""
+        if run_log == "" then
+            run_log = util.exec("logread 2>/dev/null | grep -i 'adguard' | tail -n 50") or ""
+        end
     end
 
+    -- 4. 日志混合拼接：运行日志追加至中间层下方
+    if run_log ~= "" then
+        if log_body ~= "" then
+            log_body = log_body .. "\n\n=== 系统/运行日志 (最新) ===\n" .. run_log
+        else
+            log_body = run_log
+        end
+    end
+
+    -- 5. 头部摘要层：附加 AGH 基础运行状态
     local bin_path = find_binary()
     local summary = ""
     if bin_path then
@@ -553,12 +591,23 @@ function get_log()
         summary = summary .. "========================\n\n"
     end
 
-    if not content or content == "" then
-        content = "No logs available"
+    if not log_body or log_body == "" then
+        log_body = "No logs available"
     end
 
     http.prepare_content("application/json")
-    http.write_json({ content = summary .. content })
+    http.write_json({ content = summary .. log_body })
+end
+
+-- 清空中间层执行/升级日志（仅清空 EXEC_LOG，运行日志由系统/AGH 自身管理）
+function clear_log()
+    local f = io.open(EXEC_LOG, "w")
+    if f then
+        f:write("")
+        f:close()
+    end
+    http.prepare_content("application/json")
+    http.write_json({ success = true })
 end
 
 local function semver_compare(a, b)
@@ -580,7 +629,7 @@ end
 function check_dashboard_update()
     load_proxies()
     local manifest_url = "https://raw.githubusercontent.com/" .. DASH_REPO .. "/" .. DASH_BRANCH .. "/manifest.json"
-    local body = try_with_proxies(manifest_url)
+    local body = try_with_proxies(manifest_url, true)
     if not body or body == "" then
         http.prepare_content("application/json")
         http.write_json({
@@ -734,6 +783,56 @@ function do_upgrade_dashboard()
         add("deploy_one '" .. tmp_path .. "' '" .. f.dst .. "' || fail_task 'deploy " .. f.src .. "'")
     end
 
+    -- 阶段2.5: 在备份目录生成 restore.sh（与 install.sh 的 restore 逻辑一致）
+    add("echo '>> Phase 2.5: generate restore.sh in backup dir' >> \"$LOG\"")
+    local restore_lines = {
+        "#!/bin/sh",
+        "# 一键恢复面板到本次升级前的状态",
+        "# 备份目录: " .. backup_dir,
+        "# 仅恢复 6 个面板文件，不涉及 AdGuardHome 核心",
+        "set -u",
+        "BACKUP_DIR='" .. backup_dir .. "'",
+        "",
+        "restore_one() {",
+        "  r_rel=\"$1\"; r_dst=\"$2\"; r_src=\"$BACKUP_DIR/$r_rel\"",
+        "  if [ -f \"$r_src\" ]; then",
+        "    mkdir -p \"$(dirname \"$r_dst\")\"",
+        "    cp -a \"$r_src\" \"$r_dst\" 2>/dev/null || cp \"$r_src\" \"$r_dst\"",
+        "    chmod 644 \"$r_dst\" 2>/dev/null",
+        "    echo \"  restored: $r_dst\"",
+        "  else",
+        "    echo \"  (skip) no backup: $r_rel\"",
+        "  fi",
+        "}",
+        "",
+        "echo \"=== Restore dashboard from $BACKUP_DIR ===\"",
+        "echo '>> 恢复面板文件...'",
+    }
+    -- 按 DASH_FILES 的 dst -> 相对 BACKUP_DIR 的 rel 映射
+    for i = #DASH_FILES, 1, -1 do
+        local f = DASH_FILES[i]
+        -- dst 形如 /usr/lib/lua/luci/controller/adguardhome.lua
+        -- rel 是 BACKUP_DIR 下相对路径（deploy_one 已按原 dst 完整路径备份）
+        local rel = f.dst  -- deploy_one 备份时用 "$BACKUP_DIR$e_dst" 作目标，所以 rel = e_dst
+        table.insert(restore_lines, string.format("restore_one '%s' '%s'", rel, f.dst))
+    end
+    table.insert(restore_lines, "")
+    table.insert(restore_lines, "echo '>> 清理缓存并重启服务...'")
+    table.insert(restore_lines, "rm -rf /tmp/luci-* 2>/dev/null")
+    table.insert(restore_lines, "rm -f /tmp/luci-indexcache.* /tmp/luci-modulecache.* 2>/dev/null")
+    table.insert(restore_lines, "find /tmp -name '*.luac' -delete 2>/dev/null")
+    table.insert(restore_lines, "/etc/init.d/rpcd restart 2>/dev/null")
+    table.insert(restore_lines, "/etc/init.d/uhttpd restart 2>/dev/null")
+    table.insert(restore_lines, "echo '=== 恢复完成（仅面板文件，AGH 核心未受影响）==='")
+    table.insert(restore_lines, "echo '请刷新浏览器查看效果。'")
+    local restore_body = table.concat(restore_lines, "\n")
+    -- 用 cat <<'EOF' 避免变量被 shell 解析（restore_body 内含 $ 需原样写入）
+    add("cat > \"$BACKUP_DIR/restore.sh\" <<'AGH_RESTORE_EOF'")
+    add(restore_body)
+    add("AGH_RESTORE_EOF")
+    add("chmod 755 \"$BACKUP_DIR/restore.sh\" 2>/dev/null")
+    add("echo \"   restore.sh generated: $BACKUP_DIR/restore.sh\" >> \"$LOG\"")
+
     add("echo '>> Phase 3: clear cache & restart services' >> \"$LOG\"")
     add("rm -rf /tmp/luci-* 2>/dev/null || true")
     add("rm -f /tmp/luci-indexcache.* /tmp/luci-modulecache.* 2>/dev/null || true")
@@ -755,4 +854,92 @@ function do_upgrade_dashboard()
     os.execute("sh " .. scrpath .. " 2>&1 &")
     http.prepare_content("application/json")
     http.write_json({ success = true })
+end
+
+-- 备份根目录
+local BACKUP_ROOT = "/root"
+local BACKUP_PREFIX = "agh_backup_"
+
+-- 列出所有 /root/agh_backup_* 备份目录（install / core / dashboard）
+function list_backups()
+    local backups = {}
+    local handle = io.popen("ls -d " .. BACKUP_ROOT .. "/" .. BACKUP_PREFIX .. "* 2>/dev/null")
+    if not handle then
+        http.prepare_content("application/json")
+        http.write_json({ backups = {} })
+        return
+    end
+    for line in handle:lines() do
+        local name = line:match("^.+/" .. BACKUP_PREFIX .. "(.+)$") or ""
+        local btype = name:match("^([a-z]+)_") or "unknown"
+        local ts = name:match("^([0-9_%-]+)") or ""
+        local restore = line .. "/restore.sh"
+        local has_restore = fs.access(restore) and true or false
+        local has_core = fs.access(line .. "/core/AdGuardHome") and true or false
+        -- 统计文件数和总大小
+        local count_out = util.exec("find '" .. line .. "' -type f 2>/dev/null | wc -l") or "0"
+        local file_count = tonumber(count_out:match("(%d+)")) or 0
+        local size_out = util.exec("du -sh '" .. line .. "' 2>/dev/null | awk '{print $1}'") or "?"
+        local size = size_out:gsub("%s+", "")
+        table.insert(backups, {
+            dir = line,
+            name = name,
+            type = btype,
+            timestamp = ts,
+            file_count = file_count,
+            size = size,
+            has_restore = has_restore,
+            has_core = has_core
+        })
+    end
+    handle:close()
+    table.sort(backups, function(a, b) return a.dir > b.dir end)
+    http.prepare_content("application/json")
+    http.write_json({ backups = backups })
+end
+
+-- 从指定备份目录恢复（优先执行备份目录内的 restore.sh，没有则报错）
+function restore_backup()
+    local dir = post_value("dir") or ""
+    -- 安全检查：必须在 /root/agh_backup_* 下，禁止路径穿越
+    if not dir:match("^/root/agh_backup_[%w_-]+$") then
+        http.prepare_content("application/json")
+        http.write_json({ success = false, error = "invalid backup directory" })
+        return
+    end
+    if not fs.access(dir) then
+        http.prepare_content("application/json")
+        http.write_json({ success = false, error = "backup directory not found" })
+        return
+    end
+    local restore_script = dir .. "/restore.sh"
+    if not fs.access(restore_script) then
+        http.prepare_content("application/json")
+        http.write_json({ success = false, error = "no restore.sh in this backup (可能是面板/核心升级的备份，仅 install 备份支持一键恢复)" })
+        return
+    end
+    -- 后台执行恢复脚本，输出写入升级日志，前端轮询检测
+    os.execute("echo '=== Restore from " .. dir .. " ===' > " .. UPGRADE_LOG)
+    os.execute("sh " .. restore_script .. " >> " .. UPGRADE_LOG .. " 2>&1 &")
+    http.prepare_content("application/json")
+    http.write_json({ success = true })
+end
+
+-- 删除指定备份目录
+function delete_backup()
+    local dir = post_value("dir") or ""
+    if not dir:match("^/root/agh_backup_[%w_-]+$") then
+        http.prepare_content("application/json")
+        http.write_json({ success = false, error = "invalid backup directory" })
+        return
+    end
+    if not fs.access(dir) then
+        http.prepare_content("application/json")
+        http.write_json({ success = false, error = "backup directory not found" })
+        return
+    end
+    local out = util.exec("rm -rf '" .. dir .. "' 2>&1")
+    local ok = fs.access(dir) and false or true
+    http.prepare_content("application/json")
+    http.write_json({ success = ok, error = ok and nil or "delete failed" })
 end
