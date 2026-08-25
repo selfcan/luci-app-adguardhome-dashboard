@@ -21,7 +21,6 @@ log() {
     echo "[$ts] $1"
 }
 
-# 简易计时器（兼容 BusyBox date 不支持 %N）
 _now_ms() {
     local t=$(date +%s%N 2>/dev/null)
     case "$t" in
@@ -40,12 +39,10 @@ echo ""
 # ── GitHub 连通性检测 & 代理选择 ────────────────────
 PROXY_PREFIX=""
 
-# 支持环境变量强制指定代理: GITHUB_PROXY=https://ghfast.top/ sh install.sh
 if [ -n "$GITHUB_PROXY" ]; then
     PROXY_PREFIX="$GITHUB_PROXY"
     log "使用环境变量指定代理: $PROXY_PREFIX"
 else
-    # 测试 GitHub 直连（10 秒超时，DNS 解析可能较慢）
     log "检测 GitHub 连通性..."
     _t0=$(_now_ms)
     if curl -fsSL -m 10 -o /dev/null 'https://api.github.com' 2>/dev/null; then
@@ -53,7 +50,6 @@ else
     else
         log "GitHub 直连失败，正在测试代理节点..."
 
-        # 逐个测试代理连通性（10 秒超时）
         _proxy_results=""
         for proxy in $PROXY_LIST; do
             _test_url="${proxy}https://api.github.com"
@@ -86,15 +82,25 @@ else
             _idx=$((_idx + 1))
         done
 
+        CUSTOM_OPT=$_idx
+        echo "  ${CUSTOM_OPT})  自定义代理 URL"
         echo ""
         echo "  ⚠ 连通性测试仅供参考，DNS 劫持/透明代理可能导致测试不准"
-        echo "  ⚠ 即使测试超时，代理仍可正常工作，建议选择代理重试"
         echo ""
-        printf "请选择 [1-%d，默认 2]: " $((_idx - 1))
+        printf "请选择 [1-%d，默认 2]: " "$CUSTOM_OPT"
         read -r PROXY_CHOICE
         PROXY_CHOICE=${PROXY_CHOICE:-2}
 
-        if [ "$PROXY_CHOICE" != "1" ]; then
+        if [ "$PROXY_CHOICE" = "$CUSTOM_OPT" ]; then
+            printf "请输入自定义代理 URL (例: https://gh.proxy.com/): "
+            read -r USER_PROXY
+            # 确保以斜杠结尾
+            case "$USER_PROXY" in
+                */) PROXY_PREFIX="$USER_PROXY" ;;
+                *)  PROXY_PREFIX="${USER_PROXY}/" ;;
+            esac
+            log "使用自定义代理: $PROXY_PREFIX"
+        elif [ "$PROXY_CHOICE" != "1" ]; then
             _i=1
             for proxy in $PROXY_LIST; do
                 if [ "$_i" = "$((PROXY_CHOICE - 1))" ]; then
@@ -117,11 +123,9 @@ if [ -n "$PROXY_PREFIX" ]; then
     RAW_BASE="${PROXY_PREFIX}https://raw.githubusercontent.com/${REPO}/${BRANCH}"
     AGH_INSTALL_URL="${PROXY_PREFIX}${AGH_INSTALL_URL}"
     GH_API_BASE="${PROXY_PREFIX}https://api.github.com"
-    # 保存代理配置供 Dashboard 后续使用（check_update/upgrade）
     echo "proxy=${PROXY_PREFIX}" > /etc/adguardhome-dashboard.proxy 2>/dev/null || true
 else
     GH_API_BASE="https://api.github.com"
-    # 清除旧代理配置
     rm -f /etc/adguardhome-dashboard.proxy 2>/dev/null || true
 fi
 
@@ -134,19 +138,15 @@ log "── 第一部分：AdGuard Home 核心 ──"
 if [ -f "$AGH_BIN" ]; then
     log "检测到已安装 AdGuard Home ($AGH_BIN)"
 
-    # 获取当前本地版本（awk 取最后一个字段，兼容 BusyBox）
     CURRENT_VER=$("$AGH_BIN" --version 2>&1 | awk '{print $NF}')
     case "$CURRENT_VER" in v*) ;; *) CURRENT_VER="v$CURRENT_VER" ;; esac
 
-    # 获取 GitHub 最新版本（直连 + 代理双路径）
     LATEST_VER=$(curl -fsSL -m 5 "https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null \
         | awk -F'"' '/tag_name/{print $4; exit}')
-    # 直连失败则尝试已配置的 GH_API_BASE（可能是代理）
     if [ -z "$LATEST_VER" ] && [ "$GH_API_BASE" != "https://api.github.com" ]; then
         LATEST_VER=$(curl -fsSL -m 8 "${GH_API_BASE}/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null \
             | awk -F'"' '/tag_name/{print $4; exit}')
     fi
-    # 仍失败则逐个尝试内置代理
     if [ -z "$LATEST_VER" ]; then
         for _p in $PROXY_LIST; do
             LATEST_VER=$(curl -fsSL -m 8 "${_p}https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null \
@@ -175,7 +175,6 @@ if [ -f "$AGH_BIN" ]; then
     CHOICE=${CHOICE:-2}
 
     if [ "$CHOICE" = "1" ]; then
-        # 检查是否在运行，运行中需要先停止
         if pgrep -f 'AdGuardHome' > /dev/null 2>&1; then
             log "检测到 AdGuard Home 正在运行，先停止服务..."
             if [ -f /etc/init.d/AdGuardHome ]; then
@@ -186,7 +185,6 @@ if [ -f "$AGH_BIN" ]; then
                 "$AGH_BIN" -s stop 2>/dev/null || true
             fi
             sleep 2
-            # 再次检查
             if pgrep -f 'AdGuardHome' > /dev/null 2>&1; then
                 log "警告: 服务未能正常停止，尝试强制终止..."
                 killall AdGuardHome 2>/dev/null || true
@@ -215,7 +213,6 @@ echo ""
 
 log "── 第二部分：LuCI Dashboard 管理面板 ──"
 
-# 检测是否有本地项目文件（开发模式优化）
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR" 2>/dev/null)"
 LOCAL_FILES="$PROJECT_ROOT/files"
@@ -224,7 +221,6 @@ TMPDIR=$(mktemp -d)
 DOWNLOAD_DIR="$TMPDIR/download"
 mkdir -p "$DOWNLOAD_DIR/luci/controller" "$DOWNLOAD_DIR/luci/menu.d" "$DOWNLOAD_DIR/luci/i18n" "$DOWNLOAD_DIR/view"
 
-# 从 GitHub 下载所有 Dashboard 文件
 download_from_github() {
     log "从 GitHub 下载 Dashboard 文件..."
     _cb=$(date +%s 2>/dev/null || echo 0)
@@ -233,13 +229,11 @@ download_from_github() {
     dl() {
         local path="$1" dest="$2"
         local fname=$(basename "$dest")
-        # 先尝试当前 RAW_BASE（直连或已选代理）
         if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
             -o "$dest" "${RAW_BASE}/${path}?_cb=${_cb}" 2>/dev/null; then
             log "  ✓ $fname"
             return 0
         fi
-        # 失败则逐个尝试代理 + 原始 GitHub URL（避免双重代理）
         for _p in $PROXY_LIST; do
             if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
                 -o "$dest" "${_p}${_gh_raw}/${path}?_cb=${_cb}" 2>/dev/null; then
@@ -247,7 +241,6 @@ download_from_github() {
                 return 0
             fi
         done
-        # 最后尝试直连原始 URL
         if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
             -o "$dest" "${_gh_raw}/${path}?_cb=${_cb}" 2>/dev/null; then
             log "  ✓ $fname (direct)"
@@ -333,10 +326,8 @@ chmod 644 /usr/lib/lua/luci/controller/adguardhome.lua \
 
 # ── 清除缓存 & 重启服务 ────────────────────────────
 log "清除 LuCI 缓存并重启服务..."
-# 清除所有 LuCI 相关缓存（包括 ucode bridge 缓存）
 rm -rf /tmp/luci-* 2>/dev/null || true
 rm -rf /tmp/luci-indexcache.* /tmp/luci-modulecache.* 2>/dev/null || true
-# 清除 Lua 字节码缓存
 find /tmp -name '*.luac' -delete 2>/dev/null || true
 /etc/init.d/rpcd restart 2>/dev/null || true
 /etc/init.d/uhttpd restart 2>/dev/null || true
@@ -353,7 +344,6 @@ else
     log "  ✓ controller.lua 验证通过"
 fi
 
-# ── 清理临时目录 ────────────────────────────────────
 rm -rf "$TMPDIR"
 
 echo ""

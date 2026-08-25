@@ -3,7 +3,7 @@
 'require ui';
 'require request';
 
-/* ── 客户端翻译兜底（LuCI 服务端 i18n 不可靠时的 fallback） ── */
+/* ── 客户端翻译兜底 ── */
 var _EN = {
     'AdGuard Home 控制中心': 'AdGuard Home Control Center',
     '实时状态监控 · 服务控制 · 日志查看 · 一键升级': 'Status Monitoring · Service Control · Log Viewer · One-click Upgrade',
@@ -40,7 +40,7 @@ var _EN = {
     '升级任务已启动，请在下方日志查看器中查看进度': 'Upgrade started, check progress in the log viewer below',
     '强制重装任务已启动，请在下方日志查看器中查看进度': 'Force reinstall started, check progress in the log viewer below',
     '升级任务启动失败': 'Upgrade failed to start',
-    '升级完成，正在刷新状态': 'Upgrade completed, refreshing status',
+    '升级完成，正在刷新页面...': 'Upgrade completed, reloading page...',
     '未检查': 'Not checked',
     '暂无日志': 'No logs available',
     '获取日志失败': 'Failed to get logs',
@@ -60,18 +60,37 @@ var _EN = {
     '确认安装': 'Confirm Install',
     '安装任务已启动，请在下方日志查看器中查看进度': 'Install task started, check progress in the log viewer below',
     '安装任务启动失败': 'Install task failed to start',
-    '代理/加速：': 'Proxy / Accelerator:',
-    '原始 (github.com)': 'Raw (github.com)',
-    '自定义...': 'Custom...',
-    '使用代理：': 'Using proxy:',
-    '测试': 'Test',
-    '延迟: ': 'Latency: ',
     '✔ 已安装系统服务 | ✔ 开机自启已注册': '✔ System service installed | ✔ Auto-start registered',
     '⚠️ 未注册服务 (使用二进制保底控制)': '⚠ Not registered (Using binary fallback)',
     '● 正在运行': '● Running',
     '■ 已停止': '■ Stopped',
-    '确认升级': 'Confirm',
-    '已是最新版本': 'Already up to date'
+    '已是最新版本': 'Already up to date',
+    '网络代理': 'Network Proxy',
+    '切换代理后将实时生效，用于核心与面板的检查/升级请求': 'Selected proxy applies immediately for all update & upgrade requests',
+    '直连 (Direct)': 'Direct',
+    '自定义': 'Custom',
+    '测试': 'Test',
+    '测试所有': 'Test All',
+    '测试中...': 'Testing...',
+    '可用': 'Available',
+    '不可用': 'Unavailable',
+    '测试失败': 'Test failed',
+    '地址不能为空': 'URL cannot be empty',
+    '毫秒': 'ms',
+    '面板版本': 'Dashboard Version',
+    '检查面板更新': 'Check Dashboard',
+    '检查面板版本中...': 'Checking dashboard...',
+    '升级面板': 'Upgrade Dashboard',
+    '面板最新版本：': 'Latest: ',
+    '当前面板版本：': 'Current: ',
+    '面板已是最新版本': 'Dashboard is up to date',
+    '升级面板任务已启动，请在下方日志查看器中查看进度': 'Dashboard upgrade started, check progress in the log viewer below',
+    '确认升级面板': 'Confirm Dashboard Upgrade',
+    '将从 GitHub 下载并部署最新版面板文件。期间 LuCI 会短暂重启。': 'Will download and deploy the latest dashboard files from GitHub. LuCI will briefly restart.',
+    '面板升级任务启动失败': 'Dashboard upgrade failed to start',
+    '面板升级完成，正在刷新页面': 'Dashboard upgrade completed, refreshing page',
+    '面板升级失败，已自动回滚；请检查日志与代理设置': 'Dashboard upgrade failed and auto-rolled back; please check logs and proxy settings',
+    '升级失败，已自动回滚；请检查日志与代理设置': 'Upgrade failed and auto-rolled back; please check logs and proxy settings'
 };
 
 function _isChinese() {
@@ -135,6 +154,21 @@ return view.extend({
     checkUpdateBtn: null,
     logEl: null,
 
+    /* ── 代理组件 ── */
+    proxyGroup: 'agh_proxy_' + (Math.floor(Math.random() * 1e9)),
+    proxyLatencyEls: null,
+    proxyRadioEls: null,
+    proxyCustomInput: null,
+    proxyCustomRadio: null,
+    proxyGlobalTestBtn: null,
+    proxyBusy: false,
+
+    /* ── 面板升级组件 ── */
+    dashCurrVerEl: null,
+    dashLatestVerEl: null,
+    dashCheckBtn: null,
+    dashUpgradeBtn: null,
+
     fetchStatus: function() {
         return request.get(L.url('admin/services/adguardhome/status')).then(function(res) {
             return res.json();
@@ -143,28 +177,46 @@ return view.extend({
 
     sendAction: function(action) {
         var url = L.url('admin/services/adguardhome/action');
-        var data = {};
-        if (arguments.length > 1 && arguments[1]) data = arguments[1];
-        data.action = action;
-        return request.post(url, data).then(function(res) {
+        return request.post(url, { action: action }).then(function(res) {
             return res.json();
         });
     },
 
     fetchUpdate: function() {
-        var data = {};
-        if (this.selectedProxy) data.proxy = this.selectedProxy;
-        return request.post(L.url('admin/services/adguardhome/check_update'), data).then(function(res) {
+        var proxy = this.getSelectedProxy();
+        var url = L.url('admin/services/adguardhome/check_update');
+        return request.get(url, { proxy: proxy }).then(function(res) {
             return res.json();
         });
     },
 
     sendUpgrade: function(force) {
+        var proxy = this.getSelectedProxy();
         var url = L.url('admin/services/adguardhome/upgrade');
-        var data = {};
-        if (arguments.length > 1 && arguments[1]) data = arguments[1];
-        data.force = force ? '1' : '0';
-        return request.post(url, data).then(function(res) {
+        return request.post(url, { force: force ? '1' : '0', proxy: proxy }).then(function(res) {
+            return res.json();
+        });
+    },
+
+    sendProxyTest: function(proxy) {
+        var url = L.url('admin/services/adguardhome/proxy_test');
+        return request.post(url, { proxy: proxy == null ? '' : proxy }).then(function(res) {
+            return res.json();
+        });
+    },
+
+    fetchDashboardUpdate: function() {
+        var proxy = this.getSelectedProxy();
+        var url = L.url('admin/services/adguardhome/check_dashboard_update');
+        return request.get(url, { proxy: proxy }).then(function(res) {
+            return res.json();
+        });
+    },
+
+    sendDashboardUpgrade: function() {
+        var proxy = this.getSelectedProxy();
+        var url = L.url('admin/services/adguardhome/upgrade_dashboard');
+        return request.post(url, { proxy: proxy }).then(function(res) {
             return res.json();
         });
     },
@@ -246,6 +298,99 @@ return view.extend({
         }, T('强制重装'));
         this.forceBtn = forceBtn;
 
+        /* ── 网络代理控件 ── */
+        var proxyBuiltins = [
+            { value: '',                    label: T('直连 (Direct)'), short: 'Direct' },
+            { value: 'https://ghfast.top/',   label: 'ghfast.top',       short: 'ghfast.top' },
+            { value: 'https://gh-proxy.com/', label: 'gh-proxy.com',     short: 'gh-proxy.com' },
+            { value: 'https://kkgithub.com/', label: 'kkgithub.com',     short: 'kkgithub.com' }
+        ];
+        var proxyRadioEls = [];
+        var proxyLatencyEls = {};
+        var groupName = this.proxyGroup;
+
+        function makeProxyRow(item, isCustom) {
+            var radioEl = E('input', { type: 'radio', name: groupName, value: item.value, 'data-proxy': item.value, 'data-custom': isCustom ? '1' : '0' });
+            var latencyEl = E('span', { style: 'font-size:12px; font-weight:bold; margin-left:8px; white-space:nowrap' }, '');
+            var testBtn = E('button', {
+                class: 'btn cbi-button cbi-button-action',
+                style: 'margin-left:8px; padding:2px 8px; font-size:12px'
+            }, T('测试'));
+            var row;
+            if (isCustom) {
+                var customInput = E('input', {
+                    type: 'text',
+                    class: 'cbi-input-text',
+                    placeholder: 'https://your-proxy.example.com/',
+                    style: 'margin-left:8px; min-width:260px; vertical-align:middle'
+                });
+                row = E('div', { style: 'display:flex; flex-wrap:wrap; align-items:center; padding:4px 0;' }, [
+                    radioEl,
+                    E('label', { 'for': groupName + '_custom', style: 'margin-left:4px; margin-right:0' }, T('自定义')),
+                    customInput, testBtn, latencyEl
+                ]);
+                radioEl.id = groupName + '_custom';
+                radioEl._customInput = customInput;
+                customInput._radioEl = radioEl;
+                proxyRadioEls.push({ proxy: '__custom__', radioEl: radioEl, testBtn: testBtn, latencyEl: latencyEl, customInput: customInput });
+                proxyLatencyEls['__custom__'] = latencyEl;
+                self.proxyCustomInput = customInput;
+                self.proxyCustomRadio = radioEl;
+            } else {
+                row = E('div', { style: 'display:flex; flex-wrap:wrap; align-items:center; padding:4px 0;' }, [
+                    radioEl,
+                    E('label', { style: 'margin-left:4px; margin-right:0; min-width:140px; display:inline-block' }, item.label),
+                    testBtn, latencyEl
+                ]);
+                proxyRadioEls.push({ proxy: item.value, radioEl: radioEl, testBtn: testBtn, latencyEl: latencyEl });
+                proxyLatencyEls[item.value] = latencyEl;
+            }
+            return row;
+        }
+
+        var proxyRows = [];
+        for (var i = 0; i < proxyBuiltins.length; i++) { proxyRows.push(makeProxyRow(proxyBuiltins[i], false)); }
+        proxyRows.push(makeProxyRow({ value: '', label: T('自定义') }, true));
+        this.proxyRadioEls = proxyRadioEls;
+        this.proxyLatencyEls = proxyLatencyEls;
+
+        var proxyGlobalTestBtn = E('button', {
+            class: 'btn cbi-button cbi-button-action',
+            style: 'margin-top:8px'
+        }, T('测试所有'));
+        this.proxyGlobalTestBtn = proxyGlobalTestBtn;
+
+        var proxyHeader = E('div', { style: 'margin-bottom:10px; font-size:12px; color:#888' },
+            T('切换代理后将实时生效，用于核心与面板的检查/升级请求')
+        );
+
+        var proxyContainer = E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [proxyHeader]);
+        for (var pr = 0; pr < proxyRows.length; pr++) {
+            proxyContainer.appendChild(proxyRows[pr]);
+        }
+        proxyContainer.appendChild(proxyGlobalTestBtn);
+
+        /* ── 面板自升级 UI ── */
+        var dashCurrVer = status.dashboard_version || T('未知');
+        var dashCurrCode = E('code', { style: 'margin-right:20px' }, dashCurrVer);
+        this.dashCurrVerEl = dashCurrCode;
+        var dashLatestCode = E('code', { style: 'margin-right:20px' }, T('未检查'));
+        this.dashLatestVerEl = dashLatestCode;
+
+        var dashCheckBtn = E('button', {
+            class: 'btn cbi-button cbi-button-action',
+            style: 'margin-right:10px',
+            click: function() { self.checkDashboardUpdate(); }
+        }, T('检查面板更新'));
+        this.dashCheckBtn = dashCheckBtn;
+
+        var dashUpgradeBtn = E('button', {
+            class: 'btn cbi-button cbi-button-apply',
+            style: 'display:none;margin-right:10px',
+            click: function() { self.doDashboardUpgrade(); }
+        }, T('升级面板'));
+        this.dashUpgradeBtn = dashUpgradeBtn;
+
         var logPre = E('pre', {
             style: 'max-height:300px;overflow-y:auto;padding:10px;background:' + theme.logBg + ';color:' + theme.logColor + ';font-size:12px;line-height:1.4;border-radius:4px;white-space:pre-wrap;word-break:break-all'
         }, (logData && logData.content) || T('暂无日志'));
@@ -256,54 +401,6 @@ return view.extend({
             style: 'margin-bottom:10px',
             click: function() { self.refreshLog(); }
         }, T('刷新日志'));
-
-        // 代理选项：内置 + 原始 + 自定义
-        var proxyOptions = [
-            { label: T('原始 (github.com)'), value: '' },
-            { label: 'https://ghfast.top/', value: 'https://ghfast.top/' },
-            { label: 'https://gh-proxy.com/', value: 'https://gh-proxy.com/' },
-            { label: 'https://kkgithub.com/', value: 'https://kkgithub.com/' },
-            { label: T('自定义...'), value: 'custom' }
-        ];
-        var proxySelect = E('select', { style: 'margin-right:8px' }, proxyOptions.map(function(o) { return E('option', { value: o.value }, o.label); }));
-        var proxyCustom = E('input', { type: 'text', placeholder: 'https://ghfast.top/', style: 'width:220px; margin-right:8px; display:none' });
-        var proxyTestBtn = E('button', { class: 'btn cbi-button cbi-button-action', style: 'margin-right:8px' }, T('测试'));
-        // initialize selectedProxy from backend status if present
-        if (this.statusData && this.statusData.proxy) {
-            var found = false;
-            for (var i=0;i<proxySelect.options.length;i++) {
-                if (proxySelect.options[i].value === this.statusData.proxy) { proxySelect.selectedIndex = i; found = true; break; }
-            }
-            if (!found) { proxySelect.value = 'custom'; proxyCustom.style.display = ''; proxyCustom.value = this.statusData.proxy; }
-            this.selectedProxy = this.statusData.proxy;
-        } else {
-            this.selectedProxy = '';
-        }
-        proxySelect.addEventListener('change', function() {
-            if (proxySelect.value === 'custom') {
-                proxyCustom.style.display = '';
-                proxyCustom.focus();
-                self.selectedProxy = proxyCustom.value.trim();
-                // immediately persist empty custom until user types
-                request.post(L.url('admin/services/adguardhome/set_proxy'), { proxy: '' }).catch(function() {});
-            } else {
-                proxyCustom.style.display = 'none';
-                self.selectedProxy = proxySelect.value;
-                request.post(L.url('admin/services/adguardhome/set_proxy'), { proxy: self.selectedProxy }).catch(function() {});
-            }
-        });
-        proxyCustom.addEventListener('input', function() { self.selectedProxy = proxyCustom.value.trim(); });
-        proxyTestBtn.addEventListener('click', function() {
-            proxyTestBtn.disabled = true; proxyTestBtn.textContent = '...';
-            // persist current custom proxy before testing
-            request.post(L.url('admin/services/adguardhome/set_proxy'), { proxy: self.selectedProxy || '' }).catch(function() {});
-            request.post(L.url('admin/services/adguardhome/proxy_test'), { proxy: self.selectedProxy || '' }).then(function(res) { return res.json(); }).then(function(r) {
-                if (r && r.ok) ui.addNotification(null, T('延迟: ') + (r.latency*1000).toFixed(0) + ' ms', 'info');
-                else ui.addNotification(null, T('测试') + ' failed', 'error');
-            }).catch(function() { ui.addNotification(null, T('测试') + ' failed', 'error'); }).then(function() { proxyTestBtn.disabled = false; proxyTestBtn.textContent = T('测试'); });
-        });
-
-        var proxyControls = E('div', { style: 'margin-bottom:12px;' }, [E('strong', {}, T('代理/加速：')), proxySelect, proxyCustom, proxyTestBtn]);
 
         var node = E('div', { class: 'cbi-map' }, [
             E('h2', {}, T('AdGuard Home 控制中心')),
@@ -377,9 +474,27 @@ return view.extend({
             ]),
 
             E('div', { class: 'cbi-section' }, [
+                E('h3', {}, T('网络代理')),
+                proxyContainer
+            ]),
+
+            E('div', { class: 'cbi-section' }, [
+                E('h3', {}, T('面板版本')),
+                E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [
+                    E('div', { style: 'margin-bottom:12px;' }, [
+                        E('strong', {}, T('当前面板版本：')),
+                        dashCurrCode,
+                        E('strong', {}, T('面板最新版本：')),
+                        dashLatestCode
+                    ]),
+                    dashCheckBtn,
+                    dashUpgradeBtn
+                ])
+            ]),
+
+            E('div', { class: 'cbi-section' }, [
                 E('h3', {}, T('版本更新')),
                 E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [
-                    proxyControls,
                     E('div', { style: 'margin-bottom:12px;' }, [
                         E('strong', {}, T('当前版本：')),
                         E('code', { style: 'margin-right:20px' }, versionStr),
@@ -404,7 +519,15 @@ return view.extend({
         this.rootNode = node;
         this.startPolling();
 
-        setTimeout(function() { self.checkUpdate(); }, 1000);
+        /* 代理控件：预填 + 安全事件绑定 */
+        this.prefillProxy(status.proxy || '');
+        this.bindProxyEvents();
+
+        // 自动触发核心与面板更新检查
+        setTimeout(function() {
+            self.checkUpdate();
+            self.checkDashboardUpdate();
+        }, 1000);
 
         return node;
     },
@@ -442,6 +565,214 @@ return view.extend({
                 this.urlEl.textContent = T('服务未启动');
             }
         }
+    },
+
+    /* ── 代理控件逻辑 ── */
+    prefillProxy: function(proxy) {
+        if (!this.proxyRadioEls) return;
+        var builtins = ['', 'https://ghfast.top/', 'https://gh-proxy.com/', 'https://kkgithub.com/'];
+        var isBuiltin = false;
+        for (var i = 0; i < builtins.length; i++) {
+            if (builtins[i] === proxy) { isBuiltin = true; break; }
+        }
+        if (isBuiltin) {
+            for (var j = 0; j < this.proxyRadioEls.length; j++) {
+                var r = this.proxyRadioEls[j];
+                if (r.proxy === proxy) { r.radioEl.checked = true; break; }
+            }
+            if (this.proxyCustomInput) { this.proxyCustomInput.value = ''; }
+        } else {
+            if (this.proxyCustomRadio) { this.proxyCustomRadio.checked = true; }
+            if (this.proxyCustomInput) { this.proxyCustomInput.value = proxy || ''; }
+        }
+    },
+
+    getProxyByKey: function(key) {
+        if (key === '__custom__') {
+            return this.proxyCustomInput ? (this.proxyCustomInput.value || '').trim() : '';
+        }
+        return key;
+    },
+
+    getSelectedProxy: function() {
+        if (!this.proxyRadioEls) return '';
+        for (var i = 0; i < this.proxyRadioEls.length; i++) {
+            var r = this.proxyRadioEls[i];
+            if (r.radioEl && r.radioEl.checked) return this.getProxyByKey(r.proxy);
+        }
+        return '';
+    },
+
+    bindProxyEvents: function() {
+        var self = this;
+        var items = this.proxyRadioEls || [];
+        
+        for (var i = 0; i < items.length; i++) {
+            (function(r) {
+                if (r.testBtn) {
+                    r.testBtn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        self.testProxyOne(r.proxy);
+                    });
+                }
+            })(items[i]);
+        }
+
+        /* 修复死循环点：改用 input 事件，且绝对不上锁/不触发 focus 递归级联 */
+        if (this.proxyCustomInput) {
+            var inp = this.proxyCustomInput;
+            inp.addEventListener('input', function() {
+                if (self.proxyCustomRadio && !self.proxyCustomRadio.checked) {
+                    self.proxyCustomRadio.checked = true;
+                }
+            });
+            inp.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' || e.keyCode === 13) { inp.blur(); }
+            });
+        }
+
+        if (this.proxyGlobalTestBtn) {
+            this.proxyGlobalTestBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                self.testProxyAll();
+            });
+        }
+    },
+
+    _setLatency: function(key, text, color) {
+        var el = this.proxyLatencyEls && this.proxyLatencyEls[key];
+        if (el) { el.textContent = text; el.style.color = color || ''; }
+    },
+
+    testProxyOne: function(key) {
+        var self = this;
+        var proxy = this.getProxyByKey(key);
+
+        if (key === '__custom__' && !proxy) {
+            self._setLatency(key, T('地址不能为空'), '#e74c3c');
+            return Promise.resolve();
+        }
+
+        this._setLatency(key, T('测试中...'), '#f39c12');
+        return this.sendProxyTest(proxy).then(function(data) {
+            if (data && data.ok) {
+                var ms = (data.latency !== undefined && data.latency !== null) ? Math.round(data.latency) : '?';
+                self._setLatency(key, T('可用') + ' (' + ms + T('毫秒') + ')', '#2dca73');
+            } else {
+                self._setLatency(key, T('不可用'), '#e74c3c');
+            }
+            return data;
+        }).catch(function() {
+            self._setLatency(key, T('测试失败'), '#e74c3c');
+        });
+    },
+
+    testProxyAll: function() {
+        var self = this;
+        if (this.proxyBusy) return;
+        this.proxyBusy = true;
+        
+        if (this.proxyGlobalTestBtn) {
+            this.proxyGlobalTestBtn.disabled = true;
+            this.proxyGlobalTestBtn.textContent = T('测试中...');
+        }
+
+        var items = this.proxyRadioEls || [];
+        var promises = [];
+
+        for (var i = 0; i < items.length; i++) {
+            promises.push(self.testProxyOne(items[i].proxy));
+        }
+
+        Promise.all(promises).then(function() {
+        }).catch(function(err) {
+            console.error('Proxy test all error:', err);
+        }).then(function() {
+            self.proxyBusy = false;
+            if (self.proxyGlobalTestBtn) {
+                self.proxyGlobalTestBtn.disabled = false;
+                self.proxyGlobalTestBtn.textContent = T('测试所有');
+            }
+        });
+    },
+
+    /* ── 面板自升级逻辑 ── */
+    checkDashboardUpdate: function() {
+        var self = this;
+        if (this.dashCheckBtn) {
+            this.dashCheckBtn.disabled = true;
+            this.dashCheckBtn.textContent = T('检查面板版本中...');
+        }
+        return this.fetchDashboardUpdate().then(function(res) {
+            var curr = (res && res.current_version) || T('未知');
+            var latest = (res && res.latest_version) || T('未知');
+            if (self.dashCurrVerEl) self.dashCurrVerEl.textContent = curr;
+            if (self.dashLatestVerEl) {
+                if (res && res.need_update) {
+                    self.dashLatestVerEl.textContent = latest;
+                } else if (res && res.latest_version) {
+                    self.dashLatestVerEl.textContent = latest + ' (' + T('面板已是最新版本') + ')';
+                } else {
+                    self.dashLatestVerEl.textContent = T('检查失败');
+                }
+            }
+            if (self.dashUpgradeBtn && res && res.need_update) {
+                self.dashUpgradeBtn.style.display = '';
+            } else if (self.dashUpgradeBtn) {
+                self.dashUpgradeBtn.style.display = 'none';
+            }
+        }).catch(function() {
+            if (self.dashLatestVerEl) self.dashLatestVerEl.textContent = T('检查失败');
+        }).then(function() {
+            if (self.dashCheckBtn) {
+                self.dashCheckBtn.disabled = false;
+                self.dashCheckBtn.textContent = T('检查面板更新');
+            }
+        });
+    },
+
+    doDashboardUpgrade: function() {
+        var self = this;
+        ui.showModal(E('h4', {}, T('确认升级面板')), [
+            E('p', {}, T('将从 GitHub 下载并部署最新版面板文件。期间 LuCI 会短暂重启。')),
+            E('div', { style: 'text-align:right; margin-top:15px;' }, [
+                E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
+                E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px', click: function() {
+                    ui.hideModal();
+                    self.sendDashboardUpgrade().then(function() {
+                        ui.addNotification(null, T('升级面板任务已启动，请在下方日志查看器中查看进度'), 'info');
+                        self.startDashboardPolling();
+                    }).catch(function() {
+                        ui.addNotification(null, T('面板升级任务启动失败'), 'error');
+                    });
+                }}, T('确认升级面板'))
+            ])
+        ]);
+    },
+
+    startDashboardPolling: function() {
+        var self = this;
+        this.startLogPolling();
+        var count = 0;
+        var timer = setInterval(function() {
+            count++;
+            self.fetchLog().then(function(d) {
+                var c = (d && d.content) || '';
+                if (c.indexOf('dashboard upgrade done') !== -1 || c.indexOf('Dashboard upgrade done') !== -1) {
+                    clearInterval(timer);
+                    ui.addNotification(null, T('面板升级完成，正在刷新页面'), 'info');
+                    setTimeout(function() { 
+                        window.location.href = window.location.pathname + '?_t=' + new Date().getTime(); 
+                    }, 2000);
+                } else if (c.indexOf('dashboard upgrade FAILED') !== -1 || c.indexOf('Dashboard upgrade FAILED') !== -1) {
+                    clearInterval(timer);
+                    ui.addNotification(null, T('面板升级失败，已自动回滚；请检查日志与代理设置'), 'error');
+                }
+            }).catch(function() {});
+            if (count >= 90) clearInterval(timer);
+        }, 2000);
     },
 
     startPolling: function() {
@@ -486,11 +817,20 @@ return view.extend({
                     self.logEl.textContent = data.content;
                     self.logEl.scrollTop = self.logEl.scrollHeight;
                 }
-                if (data && data.content && (data.content.indexOf('done') !== -1 || data.content.indexOf('installed') !== -1 || data.content.indexOf('completed') !== -1)) {
-                    clearInterval(self.logPollInterval);
-                    self.logPollInterval = null;
-                    ui.addNotification(null, T('升级完成，正在刷新状态'), 'info');
-                    self.fetchStatus().then(function(s) { self.updateStatusUI(s); }).catch(function() {});
+                if (data && data.content) {
+                    var c = data.content;
+                    if (c.indexOf('FAILED') !== -1) {
+                        clearInterval(self.logPollInterval);
+                        self.logPollInterval = null;
+                        ui.addNotification(null, T('升级失败，已自动回滚；请检查日志与代理设置'), 'error');
+                    } else if (c.indexOf('done') !== -1 || c.indexOf('installed') !== -1 || c.indexOf('completed') !== -1) {
+                        clearInterval(self.logPollInterval);
+                        self.logPollInterval = null;
+                        ui.addNotification(null, T('升级完成，正在刷新页面...'), 'info');
+                        setTimeout(function() {
+                            window.location.href = window.location.pathname + '?_t=' + new Date().getTime();
+                        }, 2000);
+                    }
                 }
             }).catch(function() {});
             if (pollCount >= 150) {
@@ -503,7 +843,7 @@ return view.extend({
     execAction: function(action) {
         var self = this;
         ui.showModal(E('h4', {}, T('执行中...')), [E('p', { class: 'spinning' }, action)]);
-        this.sendAction(action, self.selectedProxy ? { proxy: self.selectedProxy } : {}).then(function(res) {
+        this.sendAction(action).then(function(res) {
             ui.hideModal();
             if (res && res.success) {
                 ui.addNotification(null, T('操作执行成功'), 'info');
@@ -526,7 +866,7 @@ return view.extend({
             this.checkUpdateBtn.disabled = true;
             this.checkUpdateBtn.textContent = T('检查中...');
         }
-        this.fetchUpdate().then(function(res) {
+        return this.fetchUpdate().then(function(res) {
             var latest = (res && res.latest_version) || T('未知');
             if (self.latestVersionEl) self.latestVersionEl.textContent = latest;
             var current = self.statusData ? (self.statusData.version || '') : '';
@@ -547,15 +887,13 @@ return view.extend({
 
     doInstallCore: function() {
         var self = this;
-        var usedProxy = this.selectedProxy || '';
         ui.showModal(E('h4', {}, T('下载安装 AdGuard Home')), [
             E('p', {}, T('将从 GitHub 官方脚本下载安装 AdGuard Home 核心。安装期间请保持网络连接。')),
-            E('p', {}, [E('strong', {}, '使用代理：'), E('code', {}, usedProxy || '原始 (github.com)')]),
             E('div', { style: 'text-align:right; margin-top:15px;' }, [
                 E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
                 E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px', click: function() {
                     ui.hideModal();
-                    self.sendAction('install_core', usedProxy ? { proxy: usedProxy } : {}).then(function(res) {
+                    self.sendAction('install_core').then(function(res) {
                         if (res && res.success) {
                             ui.addNotification(null, T('安装任务已启动，请在下方日志查看器中查看进度'), 'info');
                             self.startLogPolling();
@@ -576,19 +914,14 @@ return view.extend({
         var desc = force
             ? T('将强制下载在线最新版本并覆盖安装当前版本。升级期间服务将中断。')
             : T('将下载并安装最新版本的 AdGuard Home 核心。升级期间服务可能短暂中断。');
-        var infoText = force
-            ? T('强制重装会覆盖当前二进制，通常会保留数据目录配置，但建议先备份。')
-            : T('常规升级会尝试就地更新并保留配置与历史记录。');
-        var usedProxy = this.selectedProxy || '';
+
         ui.showModal(E('h4', {}, title), [
             E('p', {}, desc),
-            E('p', {}, infoText),
-            E('p', {}, [E('strong', {}, '使用代理：'), E('code', {}, usedProxy || '原始 (github.com)')]),
             E('div', { style: 'text-align:right; margin-top:15px;' }, [
                 E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
                 E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px', click: function() {
                     ui.hideModal();
-                    self.sendUpgrade(force, usedProxy ? { proxy: usedProxy } : {}).then(function() {
+                    self.sendUpgrade(force).then(function() {
                         var msg = force ? T('强制重装任务已启动，请在下方日志查看器中查看进度') : T('升级任务已启动，请在下方日志查看器中查看进度');
                         ui.addNotification(null, msg, 'info');
                         self.startLogPolling();

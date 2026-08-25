@@ -143,3 +143,132 @@ msgstr "✔ 已安装系统服务 | ✔ 开机自启已注册"
 
 msgid "⚠️ 未注册服务 (使用二进制保底控制)"
 msgstr "⚠️ 未注册服务 (使用二进制保底控制)"
+
+msgid "强制重装"
+msgstr "强制重装"
+
+msgid "下载安装"
+msgstr "下载安装"
+
+msgid "下载安装 AdGuard Home"
+msgstr "下载安装 AdGuard Home"
+
+msgid "将从 GitHub 官方脚本下载安装 AdGuard Home 核心。安装期间请保持网络连接。"
+msgstr "将从 GitHub 官方脚本下载安装 AdGuard Home 核心。安装期间请保持网络连接。"
+
+msgid "确认安装"
+msgstr "确认安装"
+
+msgid "安装任务已启动，请在下方日志查看器中查看进度"
+msgstr "安装任务已启动，请在下方日志查看器中查看进度"
+
+msgid "安装任务启动失败"
+msgstr "安装任务启动失败"
+
+msgid "确认强制重装"
+msgstr "确认强制重装"
+
+msgid "将强制下载在线最新版本并覆盖安装当前版本。升级期间服务将中断。"
+msgstr "将强制下载在线最新版本并覆盖安装当前版本。升级期间服务将中断。"
+
+msgid "强制重装任务已启动，请在下方日志查看器中查看进度"
+msgstr "强制重装任务已启动，请在下方日志查看器中查看进度"
+
+msgid "✖ 未安装"
+msgstr "✖ 未安装"
+
+msgid "⚠️ 未注册服务"
+msgstr "⚠️ 未注册服务"
+
+msgid "● 正在运行"
+msgstr "● 正在运行"
+
+msgid "■ 已停止"
+msgstr "■ 已停止"
+
+msgid "已是最新版本"
+msgstr "已是最新版本"
+
+msgid "网络代理"
+msgstr "网络代理"
+
+msgid "当前代理已持久化，所有检查 / 升级请求将使用此代理"
+msgstr "当前代理已持久化，所有检查 / 升级请求将使用此代理"
+
+msgid "直连 (Direct)"
+msgstr "直连 (Direct)"
+
+msgid "自定义..."
+msgstr "自定义..."
+
+msgid "测试"
+msgstr "测试"
+
+msgid "测试中..."
+msgstr "测试中..."
+
+msgid "已保存"
+msgstr "已保存"
+
+msgid "保存失败"
+msgstr "保存失败"
+
+msgid "可用"
+msgstr "可用"
+
+msgid "不可用"
+msgstr "不可用"
+
+msgid "测试失败"
+msgstr "测试失败"
+
+msgid "毫秒"
+msgstr "毫秒"
+
+msgid "测试所有"
+msgstr "测试所有"
+
+msgid "自定义"
+msgstr "自定义"
+
+msgid "面板版本"
+msgstr "面板版本"
+
+msgid "检查面板更新"
+msgstr "检查面板更新"
+
+msgid "检查面板版本中..."
+msgstr "检查面板版本中..."
+
+msgid "升级面板"
+msgstr "升级面板"
+
+msgid "面板最新版本："
+msgstr "面板最新版本："
+
+msgid "当前面板版本："
+msgstr "当前面板版本："
+
+msgid "面板已是最新版本"
+msgstr "面板已是最新版本"
+
+msgid "升级面板任务已启动，请在下方日志查看器中查看进度"
+msgstr "升级面板任务已启动，请在下方日志查看器中查看进度"
+
+msgid "确认升级面板"
+msgstr "确认升级面板"
+
+msgid "将从 GitHub 下载并部署最新版面板文件。期间 LuCI 会短暂重启。"
+msgstr "将从 GitHub 下载并部署最新版面板文件。期间 LuCI 会短暂重启。"
+
+msgid "面板升级任务启动失败"
+msgstr "面板升级任务启动失败"
+
+msgid "面板升级完成，正在刷新页面"
+msgstr "面板升级完成，正在刷新页面"
+
+msgid "面板升级失败，已自动回滚；请检查日志与代理设置"
+msgstr "面板升级失败，已自动回滚；请检查日志与代理设置"
+
+msgid "升级失败，已自动回滚；请检查日志与代理设置"
+msgstr "升级失败，已自动回滚；请检查日志与代理设置"

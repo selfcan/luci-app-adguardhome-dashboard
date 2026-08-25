@@ -143,3 +143,132 @@ msgstr "✔ System service installed | ✔ Auto-start registered"
 
 msgid "⚠️ 未注册服务 (使用二进制保底控制)"
 msgstr "⚠️ Service not registered (Using binary fallback control)"
+
+msgid "强制重装"
+msgstr "Force Reinstall"
+
+msgid "下载安装"
+msgstr "Download & Install"
+
+msgid "下载安装 AdGuard Home"
+msgstr "Download & Install AdGuard Home"
+
+msgid "将从 GitHub 官方脚本下载安装 AdGuard Home 核心。安装期间请保持网络连接。"
+msgstr "Will download and install AdGuard Home core from the official GitHub script. Please keep network connection stable."
+
+msgid "确认安装"
+msgstr "Confirm Install"
+
+msgid "安装任务已启动，请在下方日志查看器中查看进度"
+msgstr "Install task started, check progress in the log viewer below"
+
+msgid "安装任务启动失败"
+msgstr "Install task failed to start"
+
+msgid "确认强制重装"
+msgstr "Confirm Force Reinstall"
+
+msgid "将强制下载在线最新版本并覆盖安装当前版本。升级期间服务将中断。"
+msgstr "Will force download and reinstall the latest version. Service will be interrupted."
+
+msgid "强制重装任务已启动，请在下方日志查看器中查看进度"
+msgstr "Force reinstall started, check progress in the log viewer below"
+
+msgid "✖ 未安装"
+msgstr "✖ Not installed"
+
+msgid "⚠️ 未注册服务"
+msgstr "⚠️ Service not registered"
+
+msgid "● 正在运行"
+msgstr "● Running"
+
+msgid "■ 已停止"
+msgstr "■ Stopped"
+
+msgid "已是最新版本"
+msgstr "Already up to date"
+
+msgid "网络代理"
+msgstr "Network Proxy"
+
+msgid "当前代理已持久化，所有检查 / 升级请求将使用此代理"
+msgstr "Current proxy is persisted and used for all check / upgrade requests"
+
+msgid "直连 (Direct)"
+msgstr "Direct"
+
+msgid "自定义..."
+msgstr "Custom..."
+
+msgid "测试"
+msgstr "Test"
+
+msgid "测试中..."
+msgstr "Testing..."
+
+msgid "已保存"
+msgstr "Saved"
+
+msgid "保存失败"
+msgstr "Save failed"
+
+msgid "可用"
+msgstr "Available"
+
+msgid "不可用"
+msgstr "Unavailable"
+
+msgid "测试失败"
+msgstr "Test failed"
+
+msgid "毫秒"
+msgstr "ms"
+
+msgid "测试所有"
+msgstr "Test All"
+
+msgid "自定义"
+msgstr "Custom"
+
+msgid "面板版本"
+msgstr "Dashboard Version"
+
+msgid "检查面板更新"
+msgstr "Check Dashboard"
+
+msgid "检查面板版本中..."
+msgstr "Checking dashboard..."
+
+msgid "升级面板"
+msgstr "Upgrade Dashboard"
+
+msgid "面板最新版本："
+msgstr "Latest: "
+
+msgid "当前面板版本："
+msgstr "Current: "
+
+msgid "面板已是最新版本"
+msgstr "Dashboard is up to date"
+
+msgid "升级面板任务已启动，请在下方日志查看器中查看进度"
+msgstr "Dashboard upgrade started, check progress in the log viewer below"
+
+msgid "确认升级面板"
+msgstr "Confirm Dashboard Upgrade"
+
+msgid "将从 GitHub 下载并部署最新版面板文件。期间 LuCI 会短暂重启。"
+msgstr "Will download and deploy the latest dashboard files from GitHub. LuCI will briefly restart."
+
+msgid "面板升级任务启动失败"
+msgstr "Dashboard upgrade failed to start"
+
+msgid "面板升级完成，正在刷新页面"
+msgstr "Dashboard upgrade completed, refreshing page"
+
+msgid "面板升级失败，已自动回滚；请检查日志与代理设置"
+msgstr "Dashboard upgrade failed and auto-rolled back; please check logs and proxy settings"
+
+msgid "升级失败，已自动回滚；请检查日志与代理设置"
+msgstr "Upgrade failed and auto-rolled back; please check logs and proxy settings"
