@@ -24,9 +24,20 @@ local CONFIG_PATHS = {
 -- 统一运行时日志路径（挂载于 /tmp tmpfs 内存文件系统）
 local EXEC_LOG = "/tmp/agh_exec.log"
 local PROXY_CONF = "/etc/adguardhome-dashboard.proxy"
-local DASHBOARD_VERSION = "2.3.0"
+local DASHBOARD_VERSION = "2.4.0"   -- 兜底默认值：仅当本地 manifest.json 缺失（老版本升级前）时使用
 local DASH_REPO = "imonior/luci-app-adguardhome-dashboard"
 local DASH_BRANCH = "main"
+-- 已安装版本统一从本地部署的 manifest.json 读取（单一数据源，避免与 manifest 漂移）；
+-- 本地文件缺失时（老版本未部署 manifest）回落到 DASHBOARD_VERSION 常量。
+local MANIFEST_LOCAL = "/usr/share/adguardhome-dashboard/manifest.json"
+local function get_installed_version()
+    local c = util.exec("cat " .. MANIFEST_LOCAL .. " 2>/dev/null")
+    if c and #c > 0 then
+        local v = c:match('"version"%s*:%s*"([^"]+)"')
+        if v and #v > 0 then return v end
+    end
+    return DASHBOARD_VERSION
+end
 
 -- 面板文件清单
 local DASH_FILES = {
@@ -35,7 +46,8 @@ local DASH_FILES = {
     { src = "files/luci/i18n/adguardhome.zh-cn.po",     dst = "/usr/lib/lua/luci/i18n/adguardhome.zh-cn.po",     base = "adguardhome.zh-cn.po",  kind = "po",  min_size = 500 },
     { src = "files/luci/i18n/adguardhome.lmo",           dst = "/usr/lib/lua/luci/i18n/adguardhome.lmo",           base = "adguardhome.lmo",       kind = "lmo", min_size = 100 },
     { src = "files/luci/i18n/adguardhome.zh-cn.lmo",     dst = "/usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo",     base = "adguardhome.zh-cn.lmo", kind = "lmo", min_size = 100 },
-    { src = "files/luci/controller/adguardhome.lua",    dst = "/usr/lib/lua/luci/controller/adguardhome.lua",    base = "adguardhome.lua",       kind = "lua", min_size = 5000 }
+    { src = "files/luci/controller/adguardhome.lua",    dst = "/usr/lib/lua/luci/controller/adguardhome.lua",    base = "adguardhome.lua",       kind = "lua", min_size = 5000 },
+    { src = "manifest.json",                            dst = "/usr/share/adguardhome-dashboard/manifest.json",  base = "manifest.json",          kind = "json", min_size = 20 }
 }
 
 local PRIMARY_PROXY = ""
@@ -169,7 +181,7 @@ function get_status()
         bin_path = "",
         init_script = "",
         proxy = "",
-        dashboard_version = DASHBOARD_VERSION
+        dashboard_version = get_installed_version()
     }
 
     status.proxy = get_persisted_proxy()
@@ -633,7 +645,7 @@ function check_dashboard_update()
     if not body or body == "" then
         http.prepare_content("application/json")
         http.write_json({
-            current_version = DASHBOARD_VERSION,
+            current_version = get_installed_version(),
             latest_version = "",
             need_update = false,
             error = "fetch_failed"
@@ -644,18 +656,18 @@ function check_dashboard_update()
     if not ver then
         http.prepare_content("application/json")
         http.write_json({
-            current_version = DASHBOARD_VERSION,
+            current_version = get_installed_version(),
             latest_version = "",
             need_update = false,
             error = "parse_failed"
         })
         return
     end
-    local cmp = semver_compare(DASHBOARD_VERSION, ver)
+    local cmp = semver_compare(get_installed_version(), ver)
     local need = (cmp and cmp < 0) or false
     http.prepare_content("application/json")
     http.write_json({
-        current_version = DASHBOARD_VERSION,
+        current_version = get_installed_version(),
         latest_version = ver,
         need_update = need
     })
@@ -707,6 +719,9 @@ function do_upgrade_dashboard()
     add("      ;;")
     add("    po)")
     add("      grep -q 'msgid' \"$v_path\" 2>/dev/null || { echo \"   [verify] po no 'msgid': $v_path\" >> \"$LOG\"; return 1; }")
+    add("      ;;")
+    add("    json)")
+    add("      grep -q '\"version\"' \"$v_path\" 2>/dev/null || { echo \"   [verify] json no 'version': $v_path\" >> \"$LOG\"; return 1; }")
     add("      ;;")
     add("  esac")
     add("  return 0")
@@ -865,7 +880,7 @@ function do_upgrade_dashboard()
     add("find /tmp -name '*.luac' -delete 2>/dev/null || true")
     add("/etc/init.d/rpcd restart 2>/dev/null >> \"$LOG\" 2>&1 || true")
     add("/etc/init.d/uhttpd restart 2>/dev/null >> \"$LOG\" 2>&1 || true")
-    add("echo '=== dashboard upgrade done (v" .. DASHBOARD_VERSION .. " -> upstream) ===' >> \"$LOG\"")
+    add("echo '=== dashboard upgrade done (v" .. get_installed_version() .. " -> upstream) ===' >> \"$LOG\"")
 
     local scrpath = tmpdir .. "_runner.sh"
     local f = io.open(scrpath, "w")

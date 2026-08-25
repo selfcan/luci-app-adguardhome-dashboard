@@ -259,6 +259,7 @@ download_from_github() {
     dl "files/view/dashboard.js"                                   "$DOWNLOAD_DIR/view/dashboard.js"
     dl "files/luci/i18n/adguardhome.lmo"                           "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo"
     dl "files/luci/i18n/adguardhome.zh-cn.lmo"                     "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo"
+    dl "manifest.json"                                              "$DOWNLOAD_DIR/manifest.json"
     # 下载校验和清单（内容指纹，用于 sha256 比对，防止代理缓存旧版本）
     if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
         -o "$DOWNLOAD_DIR/checksums.sha256" "${RAW_BASE}/checksums.sha256?_cb=${_cb}" 2>/dev/null; then
@@ -300,6 +301,7 @@ if [ -f "$LOCAL_FILES/luci/controller/adguardhome.lua" ]; then
         cp "$LOCAL_FILES/view/dashboard.js" "$DOWNLOAD_DIR/view/"
         cp "$LOCAL_FILES/luci/i18n/adguardhome.lmo" "$DOWNLOAD_DIR/luci/i18n/"
         cp "$LOCAL_FILES/luci/i18n/adguardhome.zh-cn.lmo" "$DOWNLOAD_DIR/luci/i18n/"
+        cp "$PROJECT_ROOT/manifest.json" "$DOWNLOAD_DIR/manifest.json"
     fi
 else
     download_from_github
@@ -339,6 +341,8 @@ verify_one() {
             grep -q 'fetchBackups' "$_f" 2>/dev/null || { log "  ✗ dashboard.js 缺少备份管理功能（代理缓存旧版？）"; _ok=0; } ;;
         files/luci/controller/adguardhome.lua)
             grep -q 'list_backups' "$_f" 2>/dev/null || { log "  ✗ adguardhome.lua 缺少备份 API（代理缓存旧版？）"; _ok=0; } ;;
+        manifest.json)
+            grep -q '"version"' "$_f" 2>/dev/null || { log "  ✗ manifest.json 缺少 version 字段（代理缓存旧版？）"; _ok=0; } ;;
     esac
     return $_ok
 }
@@ -351,6 +355,7 @@ verify_one "files/luci/acl.json"                                    "$DOWNLOAD_D
 verify_one "files/view/dashboard.js"                                "$DOWNLOAD_DIR/view/dashboard.js" || _fail=1
 verify_one "files/luci/i18n/adguardhome.lmo"                        "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo" || _fail=1
 verify_one "files/luci/i18n/adguardhome.zh-cn.lmo"                 "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo" || _fail=1
+verify_one "manifest.json"                                          "$DOWNLOAD_DIR/manifest.json" || _fail=1
 if [ "$_fail" = "1" ]; then
     log "内容校验失败：极可能是代理/CDN 缓存了旧版本"
     log "解决: 更换代理 GITHUB_PROXY=https://kkgithub.com/ 或 GITHUB_PROXY=https://gh-proxy.com/ 后重试"
@@ -371,6 +376,7 @@ BACKUP_PAIRS="
 /usr/lib/lua/luci/i18n/adguardhome.lmo|i18n/adguardhome.lmo
 /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo|i18n/adguardhome.zh-cn.lmo
 /www/luci-static/resources/view/adguardhome/dashboard.js|view/adguardhome/dashboard.js
+/usr/share/adguardhome-dashboard/manifest.json|adguardhome-dashboard/manifest.json
 "
 
 _backup_count=0
@@ -422,6 +428,7 @@ restore_one 'acl.d/luci-app-adguardhome-dashboard.json'                   '/usr/
 restore_one 'i18n/adguardhome.lmo'                                         '/usr/lib/lua/luci/i18n/adguardhome.lmo'
 restore_one 'i18n/adguardhome.zh-cn.lmo'                                   '/usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo'
 restore_one 'view/adguardhome/dashboard.js'                                '/www/luci-static/resources/view/adguardhome/dashboard.js'
+restore_one 'adguardhome-dashboard/manifest.json'                      '/usr/share/adguardhome-dashboard/manifest.json'
 
 echo ">> 清理缓存并重启服务..."
 rm -rf /tmp/luci-* 2>/dev/null
@@ -458,6 +465,7 @@ mkdir -p /usr/share/luci/menu.d
 mkdir -p /usr/share/rpcd/acl.d
 mkdir -p /usr/lib/lua/luci/i18n
 mkdir -p /www/luci-static/resources/view/adguardhome
+mkdir -p /usr/share/adguardhome-dashboard
 
 # ── 部署文件 ────────────────────────────────────────
 log "部署文件到系统目录..."
@@ -467,6 +475,7 @@ cp "$DOWNLOAD_DIR/luci/acl.json"                                       /usr/shar
 cp "$DOWNLOAD_DIR/view/dashboard.js"                                   /www/luci-static/resources/view/adguardhome/dashboard.js
 cp "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo"                           /usr/lib/lua/luci/i18n/
 cp "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo"                     /usr/lib/lua/luci/i18n/
+cp "$DOWNLOAD_DIR/manifest.json"                                       /usr/share/adguardhome-dashboard/manifest.json
 
 # ── 设置权限 ────────────────────────────────────────
 chmod 644 /usr/lib/lua/luci/controller/adguardhome.lua \
@@ -474,6 +483,7 @@ chmod 644 /usr/lib/lua/luci/controller/adguardhome.lua \
           /usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json \
           /usr/lib/lua/luci/i18n/adguardhome.lmo \
           /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo \
+          /usr/share/adguardhome-dashboard/manifest.json \
           /www/luci-static/resources/view/adguardhome/dashboard.js
 
 # ── 清除缓存 & 重启服务 ────────────────────────────
@@ -500,6 +510,11 @@ if grep -q 'fetchBackups' /www/luci-static/resources/view/adguardhome/dashboard.
 else
     log "⚠ 警告: dashboard.js 缺少备份管理功能（可能是代理缓存的旧版本）"
     log "  手动重拉: curl -fsSL '${RAW_BASE}/files/view/dashboard.js' -o /www/luci-static/resources/view/adguardhome/dashboard.js"
+fi
+if [ -f /usr/share/adguardhome-dashboard/manifest.json ] && grep -q '"version"' /usr/share/adguardhome-dashboard/manifest.json 2>/dev/null; then
+    log "  ✓ manifest.json 验证通过"
+else
+    log "⚠ 警告: manifest.json 未部署或缺少 version 字段"
 fi
 
 rm -rf "$TMPDIR"

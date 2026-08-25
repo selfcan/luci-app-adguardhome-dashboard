@@ -315,8 +315,10 @@ python3 tools/po2lmo.py files/luci/i18n/adguardhome.zh-cn.po files/luci/i18n/adg
              files/luci/i18n/adguardhome.zh-cn.lmo \
              files/luci/i18n/adguardhome.po \
              files/luci/i18n/adguardhome.zh-cn.po > checksums.sha256
+   # manifest.json 单独追加（key 为仓库根路径，与下载 src 一致）
+   printf '%s  manifest.json\n' "$(sha256sum manifest.json | awk '{print $1}')" >> checksums.sha256
    ```
-4. 在 `manifest.json` 中按语义化版本 bump `version` 字段（同时核对 `adguardhome.lua` 中 `DASHBOARD_VERSION` 常量保持一致）
+4. 在 `manifest.json` 中按语义化版本 bump `version` 字段。**版本号是单一数据源**：路由器上的 `adguardhome.lua` 会在运行时读取本地部署的 `/usr/share/adguardhome-dashboard/manifest.json` 获取已安装版本（不再依赖写死的 `DASHBOARD_VERSION` 常量，该常量仅作为「本地 manifest 缺失」时的兜底）。因此发版**只需改 manifest.json 一个数字**，无需手动同步 lua 常量。
 5. `git add files/ checksums.sha256 manifest.json && git commit -m "bump dashboard to x.y.z" && git push origin main`
 
 推到 main 后，所有路由器上点「检查面板更新」即可看到新版本并在线升级。

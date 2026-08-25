@@ -104,6 +104,10 @@ var _EN = {
     '大小': 'Size',
     '含核心': 'Has Core',
     '操作': 'Actions',
+    '清空日志': 'Clear Log',
+    '自动刷新': 'Auto Refresh',
+    '清空失败': 'Clear Failed',
+    '⚠️ 未注册服务': '⚠ Not Registered',
     '安装': 'Install',
     '核心升级': 'Core Upgrade',
     '面板升级': 'Dashboard Upgrade',
@@ -236,12 +240,12 @@ return view.extend({
         }
         var table = E('table', { class: 'table cbi-section-table', style: 'width:100%;font-size:12px' }, [
             E('tr', { class: 'tr' }, [
-                E('th', { class: 'th', style: 'width:18%' }, T('类型')),
+                E('th', { class: 'th', style: 'width:14%' }, T('类型')),
                 E('th', { class: 'th', style: 'width:20%' }, T('时间戳')),
-                E('th', { class: 'th', style: 'width:12%' }, T('文件数')),
+                E('th', { class: 'th', style: 'width:9%' }, T('文件数')),
                 E('th', { class: 'th', style: 'width:10%' }, T('大小')),
-                E('th', { class: 'th', style: 'width:12%' }, T('含核心')),
-                E('th', { class: 'th', style: 'width:28%' }, T('操作'))
+                E('th', { class: 'th', style: 'width:9%' }, T('含核心')),
+                E('th', { class: 'th', style: 'width:38%' }, T('操作'))
             ])
         ]);
         backups.forEach(function(b) {
