@@ -3,7 +3,7 @@
 'require ui';
 'require request';
 
-/* ── 客户端翻译兜底 ── */
+/* ── Client-side translation fallback ── */
 var _EN = {
     'AdGuard Home 控制中心': 'AdGuard Home Control Center',
     '实时状态监控 · 服务控制 · 日志查看 · 一键升级': 'Status Monitoring · Service Control · Log Viewer · One-click Upgrade',
@@ -127,7 +127,7 @@ var _EN = {
     '网络错误': 'Network error'
 };
 
-var _ZH_CACHE = null;  // _isChinese 结果缓存，页面生命周期内不用重复检测
+var _ZH_CACHE = null;  // _isChinese 结果缓存，页面生命周期内不用重复检测 / cache _isChinese result; no re-detect within page lifetime
 function _isChinese() {
     if (_ZH_CACHE !== null) return _ZH_CACHE;
     var isZh = true;
@@ -193,7 +193,7 @@ return view.extend({
     checkUpdateBtn: null,
     logEl: null,
 
-    /* ── 代理组件 ── */
+    /* ── Proxy component ── */
     proxyGroup: 'agh_proxy_' + (Math.floor(Math.random() * 1e9)),
     proxyLatencyEls: null,
     proxyRadioEls: null,
@@ -202,16 +202,16 @@ return view.extend({
     proxyGlobalTestBtn: null,
     proxyBusy: false,
 
-    /* 客户端防抖（防止用户连点 start/stop/restart/upgrade 等按钮产生重复请求） */
+    /* 客户端防抖（防止用户连点 start/stop/restart/upgrade 等按钮产生重复请求） / Client-side debounce (prevent duplicate requests from rapid clicks on start/stop/restart/upgrade buttons) */
     _actionBusy: false,
 
-    /* ── 面板升级组件 ── */
+    /* ── Panel upgrade component ── */
     dashCurrVerEl: null,
     dashLatestVerEl: null,
     dashCheckBtn: null,
     dashUpgradeBtn: null,
 
-    /* ── 备份管理组件 ── */
+    /* ── Backup management component ── */
     backupsListEl: null,
 
     fetchBackups: function() {
@@ -305,7 +305,7 @@ return view.extend({
         }).then(function(d) {
             if (d && d.success) {
                 if (self.backupsListEl) self.backupsListEl.appendChild(E('div', { style: 'padding:8px;color:#2dca73' }, T('恢复中，请稍候...')));
-                /* startLogPolling 统一处理恢复完成检测（=== Restore from /root/agh_backup / 恢复完成）+ 页面刷新 */
+                /* startLogPolling 统一处理恢复完成检测（=== Restore from /root/agh_backup / 恢复完成）+ 页面刷新 / startLogPolling uniformly handles restore-completion detection (=== Restore from /root/agh_backup / 恢复完成) + page refresh */
                 self.startLogPolling();
             } else {
                 alert((d && d.error) || T('恢复失败'));
@@ -456,7 +456,7 @@ return view.extend({
         }, T('强制重装'));
         this.forceBtn = forceBtn;
 
-        /* ── 网络代理控件 ── */
+        /* ── Network proxy control ── */
         var proxyBuiltins = [
             { value: '',                    label: T('直连 (Direct)'), short: 'Direct' },
             { value: 'https://ghfast.top/',   label: 'ghfast.top',       short: 'ghfast.top' },
@@ -528,7 +528,7 @@ return view.extend({
         }
         proxyContainer.appendChild(proxyGlobalTestBtn);
 
-        /* ── 面板自升级 UI ── */
+        /* ── Panel self-upgrade UI ── */
         var dashCurrVer = status.dashboard_version || T('未知');
         var dashCurrCode = E('code', { style: 'margin-right:20px' }, dashCurrVer);
         this.dashCurrVerEl = dashCurrCode;
@@ -709,11 +709,11 @@ return view.extend({
         this.rootNode = node;
         this.startPolling();
 
-        /* 代理控件：预填 + 安全事件绑定 */
+        /* 代理控件：预填 + 安全事件绑定 / Proxy control: prefill + safe event binding */
         this.prefillProxy(status.proxy || '');
         this.bindProxyEvents();
 
-        // 自动触发核心与面板更新检查 + 加载备份列表
+        // 自动触发核心与面板更新检查 + 加载备份列表 / Auto-trigger core & panel update checks + load backup list
         setTimeout(function() {
             self.checkUpdate();
             self.checkDashboardUpdate();
@@ -758,7 +758,7 @@ return view.extend({
         }
     },
 
-    /* ── 代理控件逻辑 ── */
+    /* ── Proxy control logic ── */
     prefillProxy: function(proxy) {
         if (!this.proxyRadioEls) return;
         var builtins = ['', 'https://ghfast.top/', 'https://gh-proxy.com/', 'https://kkgithub.com/'];
@@ -810,7 +810,7 @@ return view.extend({
             })(items[i]);
         }
 
-        /* 修复死循环点：改用 input 事件，且绝对不上锁/不触发 focus 递归级联 */
+        /* 修复死循环点：改用 input 事件，且绝对不上锁/不触发 focus 递归级联 / Fix infinite-loop point: use the input event instead, and never lock / never trigger focus recursion cascade */
         if (this.proxyCustomInput) {
             var inp = this.proxyCustomInput;
             inp.addEventListener('input', function() {
@@ -871,7 +871,7 @@ return view.extend({
         }
 
         var items = this.proxyRadioEls || [];
-        /* 串行：对性能弱的路由器更友好（避免同时 5 个 curl 阻塞 Lua 进程） */
+        /* 串行：对性能弱的路由器更友好（避免同时 5 个 curl 阻塞 Lua 进程） / Serial: friendlier to weak routers (avoid 5 concurrent curls blocking the Lua process) */
         (function run(i) {
             if (i >= items.length) {
                 self.proxyBusy = false;
@@ -887,7 +887,7 @@ return view.extend({
         })(0);
     },
 
-    /* ── 面板自升级逻辑 ── */
+    /* ── Panel self-upgrade logic ── */
     checkDashboardUpdate: function() {
         var self = this;
         if (this.dashCheckBtn) {
@@ -942,7 +942,7 @@ return view.extend({
     },
 
     startDashboardPolling: function() {
-        /* startLogPolling 已统一处理 === dashboard upgrade done / FAILED 检测 + 页面刷新 + _autoRefreshPaused 恢复 */
+        /* startLogPolling 已统一处理 === dashboard upgrade done / FAILED 检测 + 页面刷新 + _autoRefreshPaused 恢复 / startLogPolling already handles === dashboard upgrade done / FAILED detection + page refresh + _autoRefreshPaused restore */
         this.startLogPolling();
     },
 
@@ -983,8 +983,13 @@ return view.extend({
             return res.json();
         }).then(function(d) {
             if (d && d.success) {
-                /* 清空后重新拉取：此时 EXEC_LOG 已空，仅显示运行日志 */
-                self.refreshLog();
+                /* 仅清视图：第一部分(EXEC_LOG)已由服务端清空并持久；
+                   第二部分(系统/AGH 运行日志)属系统自身，不在服务端删除，
+                   刷新后由 fetchLog 重新拉取继续显示。此处只清空当前视图。
+                   [EN] View-only clear: part 1 (EXEC_LOG) is already cleared & persisted server-side;
+                   part 2 (system/AGH runtime log) belongs to the system and is not deleted server-side;
+                   after refresh fetchLog re-pulls it. Here we only clear the current view. */
+                if (self.logEl) self.logEl.textContent = "";
             } else {
                 alert((d && d.error) || T('清空失败'));
             }
@@ -1000,9 +1005,9 @@ return view.extend({
             this.autoRefreshLogInterval = null;
         }
         if (enabled) {
-            /* 自动刷新：3 秒间隔（与升级时的 2 秒轮询区分，避免冲突） */
+            /* 自动刷新：3 秒间隔（与升级时的 2 秒轮询区分，避免冲突） / Auto-refresh: 3s interval (separate from the 2s upgrade poll to avoid conflicts) */
             this.autoRefreshLogInterval = setInterval(function() {
-                /* 升级进行中时自动暂停（logPollInterval 已在工作），避免重复请求/覆盖升级通知 */
+                /* 升级进行中时自动暂停（logPollInterval 已在工作），避免重复请求/覆盖升级通知 / Auto-pause while upgrade is in progress (logPollInterval is already running) to avoid duplicate requests / overwriting the upgrade notice */
                 if (self.logPollInterval) return;
                 if (self._autoRefreshPaused) return;
                 self.refreshLog();
@@ -1013,7 +1018,7 @@ return view.extend({
     startLogPolling: function() {
         var self = this;
         if (this.logPollInterval) clearInterval(this.logPollInterval);
-        /* 升级开始：临时暂停自动刷新，等升级结束再恢复，避免两个定时器同时拉日志 */
+        /* 升级开始：临时暂停自动刷新，等升级结束再恢复，避免两个定时器同时拉日志 / Upgrade start: temporarily pause auto-refresh, resume after upgrade ends, to avoid two timers pulling logs at once */
         var wasAuto = !!this.autoRefreshLogInterval;
         if (wasAuto) this._autoRefreshPaused = true;
         var pollCount = 0;
@@ -1045,7 +1050,7 @@ return view.extend({
                     if (done) {
                         clearInterval(self.logPollInterval);
                         self.logPollInterval = null;
-                        /* 升级结束：恢复用户之前开启的自动刷新 */
+                        /* 升级结束：恢复用户之前开启的自动刷新 / Upgrade end: resume the auto-refresh the user had enabled */
                         self._autoRefreshPaused = false;
                     }
                 }
@@ -1060,7 +1065,7 @@ return view.extend({
 
     execAction: function(action) {
         var self = this;
-        if (this._actionBusy) return;   // 防抖：快速连点忽略
+        if (this._actionBusy) return;   // 防抖：快速连点忽略 / debounce: ignore rapid repeated clicks
         this._actionBusy = true;
         ui.showModal(E('h4', {}, T('执行中...')), [E('p', { class: 'spinning' }, action)]);
         this.sendAction(action).then(function(res) {

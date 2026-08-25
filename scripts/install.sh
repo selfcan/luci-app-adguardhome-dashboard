@@ -9,7 +9,7 @@ AGH_DIR="/opt/AdGuardHome"
 AGH_BIN="/opt/AdGuardHome/AdGuardHome"
 AGH_INSTALL_URL="https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh"
 
-# GitHub 加速代理列表（国内用户可选）
+# GitHub 加速代理列表（国内用户可选） / GitHub acceleration proxy list (optional for users in mainland CN)
 PROXY_LIST="
 https://ghfast.top/
 https://gh-proxy.com/
@@ -22,7 +22,7 @@ log() {
 }
 
 _now_ms() {
-    # BusyBox date 不支持 %N 纳秒，直接用秒 × 1000（粒度 1s 足够代理延迟显示，且跨平台兼容）
+    # BusyBox date 不支持 %N 纳秒，直接用秒 × 1000（粒度 1s 足够代理延迟显示，且跨平台兼容） / BusyBox date lacks %N nanoseconds; use seconds × 1000 (1s granularity suffices for proxy latency display and is cross-platform)
     echo $(( $(date +%s 2>/dev/null || echo 0) * 1000 ))
 }
 _elapsed_ms() { echo $(( $(_now_ms) - $1 )); }
@@ -33,8 +33,8 @@ echo " AdGuardHome LuCI Dashboard 安装程序"
 echo "========================================================="
 echo ""
 
-# ── GitHub 连通性检测 & 代理选择 ────────────────────
-# 测试目标与实际下载用的域名一致：raw.githubusercontent.com
+# ── GitHub 连通性检测 & 代理选择 ──────────────────── / GitHub connectivity check & proxy selection
+# 测试目标与实际下载用的域名一致：raw.githubusercontent.com / Test target matches the actual download domain: raw.githubusercontent.com
 TEST_URL="https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/README.md"
 
 PROXY_PREFIX=""
@@ -50,7 +50,7 @@ else
     else
         log "GitHub 直连失败，正在测试代理节点..."
 
-        # 用临时文件记录每个代理的测试结果（path|status|ms），避免脆弱的字符串解析
+        # 用临时文件记录每个代理的测试结果（path|status|ms），避免脆弱的字符串解析 / Record each proxy's test result in a temp file (path|status|ms) to avoid fragile string parsing
         _results_file=$(mktemp 2>/dev/null || echo "/tmp/agh_proxy_results_$$")
         : > "$_results_file"
 
@@ -93,7 +93,7 @@ else
         if [ "$PROXY_CHOICE" = "$CUSTOM_OPT" ]; then
             printf "请输入自定义代理 URL (例: https://gh.proxy.com/): "
             read -r USER_PROXY
-            # 确保以斜杠结尾
+            # 确保以斜杠结尾 / Ensure it ends with a slash
             case "$USER_PROXY" in
                 */) PROXY_PREFIX="$USER_PROXY" ;;
                 *)  PROXY_PREFIX="${USER_PROXY}/" ;;
@@ -120,7 +120,7 @@ else
     fi
 fi
 
-# 应用代理到所有 GitHub URL
+# 应用代理到所有 GitHub URL / Apply the proxy to all GitHub URLs
 if [ -n "$PROXY_PREFIX" ]; then
     RAW_BASE="${PROXY_PREFIX}https://raw.githubusercontent.com/${REPO}/${BRANCH}"
     AGH_INSTALL_URL="${PROXY_PREFIX}${AGH_INSTALL_URL}"
@@ -132,7 +132,7 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════
-# 第一部分：安装 AdGuard Home 核心
+# 第一部分：安装 AdGuard Home 核心 / Part 1: install the AdGuard Home core
 # ═══════════════════════════════════════════════════════════
 
 log "── 第一部分：AdGuard Home 核心 ──"
@@ -210,7 +210,7 @@ fi
 echo ""
 
 # ═══════════════════════════════════════════════════════════
-# 第二部分：安装 LuCI Dashboard 管理面板
+# 第二部分：安装 LuCI Dashboard 管理面板 / Part 2: install the LuCI Dashboard management panel
 # ═══════════════════════════════════════════════════════════
 
 log "── 第二部分：LuCI Dashboard 管理面板 ──"
@@ -260,7 +260,7 @@ download_from_github() {
     dl "files/luci/i18n/adguardhome.lmo"                           "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo"
     dl "files/luci/i18n/adguardhome.zh-cn.lmo"                     "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo"
     dl "manifest.json"                                              "$DOWNLOAD_DIR/manifest.json"
-    # 下载校验和清单（内容指纹，用于 sha256 比对，防止代理缓存旧版本）
+    # 下载校验和清单（内容指纹，用于 sha256 比对，防止代理缓存旧版本） / Download the checksum manifest (content fingerprint, used for sha256 comparison to prevent stale proxy-cached builds)
     if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
         -o "$DOWNLOAD_DIR/checksums.sha256" "${RAW_BASE}/checksums.sha256?_cb=${_cb}" 2>/dev/null; then
         log "  ✓ checksums.sha256"
@@ -307,7 +307,7 @@ else
     download_from_github
 fi
 
-# ── 辅助：计算 sha256（兼容无 sha256sum 的环境降级到 openssl）──
+# ── 辅助：计算 sha256（兼容无 sha256sum 的环境降级到 openssl）── / Helper: compute sha256 (falls back to openssl where sha256sum is unavailable)
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" 2>/dev/null | awk '{print $1}'
@@ -316,10 +316,10 @@ sha256_of() {
     fi
 }
 
-# ── 内容校验：sha256 指纹（主） + 语义特征（兜底）──
-# 防止代理/CDN 返回缓存中的旧版本（曾因 ghfast.top 缓存旧 dashboard.js 导致备份管理缺失）。
-# sha256 比对能拦下"任何与发布清单不一致的内容"（不限于缺失某功能）；
-# 若 checksums.sha256 不可用，则降级为语义特征校验（fetchBackups / list_backups）。
+# ── 内容校验：sha256 指纹（主） + 语义特征（兜底）── / Content verification: sha256 fingerprint (primary) + semantic feature (fallback)
+# 防止代理/CDN 返回缓存中的旧版本（曾因 ghfast.top 缓存旧 dashboard.js 导致备份管理缺失）。 / Prevent proxies/CDNs from serving a cached old build (ghfast.top once cached an old dashboard.js, dropping the backup feature).
+# sha256 比对能拦下"任何与发布清单不一致的内容"（不限于缺失某功能）； / sha256 comparison blocks ANY content diverging from the release manifest (not limited to a missing feature);
+# 若 checksums.sha256 不可用，则降级为语义特征校验（fetchBackups / list_backups）。 / If checksums.sha256 is unavailable, fall back to semantic feature checks (fetchBackups / list_backups).
 verify_one() {
     _src="$1"; _f="$2"
     _ok=1
@@ -364,11 +364,11 @@ if [ "$_fail" = "1" ]; then
 fi
 log "  ✓ 内容校验通过（sha256 指纹 + 语义特征）"
 
-# ── 备份当前安装的文件（与面板升级的两阶段提交保持一致）────────────
+# ── 备份当前安装的文件（与面板升级的两阶段提交保持一致）──────────── / Back up currently-installed files (kept consistent with the panel-upgrade two-phase commit)
 TS=$(date '+%Y%m%d_%H%M%S' 2>/dev/null || date +%s 2>/dev/null || echo 0)
 BACKUP_DIR="/root/agh_backup_install_${TS}"
 
-# 备份目标：与下面清理/部署完全对应的现有文件
+# 备份目标：与下面清理/部署完全对应的现有文件 / Backup targets: the existing files that map exactly to the cleanup/deploy below
 BACKUP_PAIRS="
 /usr/lib/lua/luci/controller/adguardhome.lua|controller/adguardhome.lua
 /usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json|menu.d/luci-app-adguardhome-dashboard.json
@@ -391,17 +391,17 @@ for pair in $BACKUP_PAIRS; do
     fi
 done
 
-# 注意：install 不备份 AdGuardHome 核心二进制，核心安装/升级的回滚由 AGH 官方安装脚本和核心升级流程单独管理
+# 注意：install 不备份 AdGuardHome 核心二进制，核心安装/升级的回滚由 AGH 官方安装脚本和核心升级流程单独管理 / Note: install does NOT back up the AdGuardHome core binary; core rollback is handled separately by AGH's official script and the core-upgrade flow
 
 if [ "$_backup_count" -gt 0 ]; then
     log "本次备份 $_backup_count 个面板文件至: $BACKUP_DIR"
 
-    # 生成 restore.sh：用户可一键恢复到本次安装前的状态（仅面板文件，不含 AGH 核心）
+    # 生成 restore.sh：用户可一键恢复到本次安装前的状态（仅面板文件，不含 AGH 核心） / Generate restore.sh: one-click restore to the pre-install state (panel files only, no AGH core)
     cat > "$BACKUP_DIR/restore.sh" <<EOF
 #!/bin/sh
-# 一键恢复 LuCI Dashboard 到 $(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null) 安装前的状态
-# 备份目录: $BACKUP_DIR
-# 仅恢复面板文件，不涉及 AdGuardHome 核心二进制
+# 一键恢复 LuCI Dashboard 到 $(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null) 安装前的状态 / One-click restore of the LuCI Dashboard to its pre-install state
+# 备份目录: $BACKUP_DIR / Backup dir: $BACKUP_DIR
+# 仅恢复面板文件，不涉及 AdGuardHome 核心二进制 / Restore panel files only; does not touch the AdGuardHome core binary
 set -u
 BACKUP_DIR='$BACKUP_DIR'
 
@@ -446,7 +446,7 @@ else
     log "本次安装为全新部署，无旧文件可备份"
 fi
 
-# ── 清理旧版本文件 ──────────────────────────────────
+# ── 清理旧版本文件 ────────────────────────────────── / Clean up old-version files
 log "清理旧版本文件..."
 rm -f /usr/lib/lua/luci/controller/adguardhome.lua
 rm -f /usr/share/luci/controller/adguardhome.lua
@@ -459,7 +459,7 @@ rm -f /usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json
 rm -f /usr/lib/lua/luci/i18n/adguardhome.lmo
 rm -f /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo
 
-# ── 创建目标目录 ────────────────────────────────────
+# ── 创建目标目录 ──────────────────────────────────── / Create target directories
 mkdir -p /usr/lib/lua/luci/controller
 mkdir -p /usr/share/luci/menu.d
 mkdir -p /usr/share/rpcd/acl.d
@@ -467,7 +467,7 @@ mkdir -p /usr/lib/lua/luci/i18n
 mkdir -p /www/luci-static/resources/view/adguardhome
 mkdir -p /usr/share/adguardhome-dashboard
 
-# ── 部署文件 ────────────────────────────────────────
+# ── 部署文件 ──────────────────────────────────────── / Deploy files
 log "部署文件到系统目录..."
 cp "$DOWNLOAD_DIR/luci/controller/adguardhome.lua"                     /usr/lib/lua/luci/controller/adguardhome.lua
 cp "$DOWNLOAD_DIR/luci/menu.d/luci-app-adguardhome-dashboard.json"     /usr/share/luci/menu.d/
@@ -477,7 +477,7 @@ cp "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo"                           /usr/lib/
 cp "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo"                     /usr/lib/lua/luci/i18n/
 cp "$DOWNLOAD_DIR/manifest.json"                                       /usr/share/adguardhome-dashboard/manifest.json
 
-# ── 设置权限 ────────────────────────────────────────
+# ── 设置权限 ──────────────────────────────────────── / Set permissions
 chmod 644 /usr/lib/lua/luci/controller/adguardhome.lua \
           /usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json \
           /usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json \
@@ -486,7 +486,7 @@ chmod 644 /usr/lib/lua/luci/controller/adguardhome.lua \
           /usr/share/adguardhome-dashboard/manifest.json \
           /www/luci-static/resources/view/adguardhome/dashboard.js
 
-# ── 清除缓存 & 重启服务 ────────────────────────────
+# ── 清除缓存 & 重启服务 ──────────────────────────── / Clear cache & restart services
 log "清除 LuCI 缓存并重启服务..."
 rm -rf /tmp/luci-* 2>/dev/null || true
 rm -rf /tmp/luci-indexcache.* /tmp/luci-modulecache.* 2>/dev/null || true
@@ -494,7 +494,7 @@ find /tmp -name '*.luac' -delete 2>/dev/null || true
 /etc/init.d/rpcd restart 2>/dev/null || true
 /etc/init.d/uhttpd restart 2>/dev/null || true
 
-# ── 部署验证 ────────────────────────────────────────
+# ── 部署验证 ──────────────────────────────────────── / Deployment verification
 log "验证部署文件..."
 if grep -q 'loadc' /usr/lib/lua/luci/controller/adguardhome.lua 2>/dev/null; then
     log "⚠ 警告: controller.lua 仍包含旧代码 (i18n.loadc)"

@@ -21,14 +21,14 @@ local CONFIG_PATHS = {
     "/etc/adguardhome/adguardhome.yaml"
 }
 
--- 统一运行时日志路径（挂载于 /tmp tmpfs 内存文件系统）
+-- 统一运行时日志路径（挂载于 /tmp tmpfs 内存文件系统） / Unified runtime log path (mounted on /tmp tmpfs in-memory fs)
 local EXEC_LOG = "/tmp/agh_exec.log"
 local PROXY_CONF = "/etc/adguardhome-dashboard.proxy"
-local DASHBOARD_VERSION = "2.4.0"   -- 兜底默认值：仅当本地 manifest.json 缺失（老版本升级前）时使用
+local DASHBOARD_VERSION = "2.5.0"   -- 兜底默认值：仅当本地 manifest.json 缺失（老版本升级前）时使用
 local DASH_REPO = "imonior/luci-app-adguardhome-dashboard"
 local DASH_BRANCH = "main"
--- 已安装版本统一从本地部署的 manifest.json 读取（单一数据源，避免与 manifest 漂移）；
--- 本地文件缺失时（老版本未部署 manifest）回落到 DASHBOARD_VERSION 常量。
+-- 已安装版本统一从本地部署的 manifest.json 读取（单一数据源，避免与 manifest 漂移）； / Installed version is read from the locally-deployed manifest.json (single source of truth, avoids drift from the manifest);
+-- 本地文件缺失时（老版本未部署 manifest）回落到 DASHBOARD_VERSION 常量。 / Falls back to the DASHBOARD_VERSION constant when the local file is missing (older versions without a deployed manifest).
 local MANIFEST_LOCAL = "/usr/share/adguardhome-dashboard/manifest.json"
 local function get_installed_version()
     local c = util.exec("cat " .. MANIFEST_LOCAL .. " 2>/dev/null")
@@ -39,7 +39,7 @@ local function get_installed_version()
     return DASHBOARD_VERSION
 end
 
--- 面板文件清单
+-- 面板文件清单 / Dashboard file manifest
 local DASH_FILES = {
     { src = "files/view/dashboard.js",                  dst = "/www/luci-static/resources/view/adguardhome/dashboard.js", base = "dashboard.js", kind = "js",  min_size = 10000 },
     { src = "files/luci/i18n/adguardhome.po",           dst = "/usr/lib/lua/luci/i18n/adguardhome.po",           base = "adguardhome.po",        kind = "po",  min_size = 500 },
@@ -98,7 +98,7 @@ local function try_with_proxies(url, expect_json)
     local function attempt(target, timeout)
         local out = util.exec("curl -m " .. timeout .. " -fsSL '" .. target .. "' 2>/dev/null")
         if not out or #out < 10 then return nil end
-        -- 过滤掉 GitHub 返回的 403/404 HTML 错误页（curl -f 应该拦截但某些代理会篡改响应码）
+        -- 过滤掉 GitHub 返回的 403/404 HTML 错误页（curl -f 应该拦截但某些代理会篡改响应码） / Drop 403/404 HTML error pages returned by GitHub (curl -f should block these, but some proxies tamper with the status code)
         if out:find("^<!DOCTYPE HTML", 1, true)
             or out:find("^<!doctype html", 1, true)
             or out:find("^<html", 1, true)
@@ -107,7 +107,7 @@ local function try_with_proxies(url, expect_json)
             return nil
         end
         if expect then
-            -- JSON 健壮性：以 { 或 [ 开头，至少包含一个 "key" : 形式或纯数组内容
+            -- JSON 健壮性：以 { 或 [ 开头，至少包含一个 "key" : 形式或纯数组内容 / JSON robustness: must start with { or [ and contain at least one "key": pair or be a pure array
             local s = out:gsub("^%s+", ""):gsub("%s+$", "")
             if not (s:sub(1, 1) == '{' or s:sub(1, 1) == '[') then return nil end
         end
@@ -221,15 +221,15 @@ function get_status()
             if content then
                 local port = content:match("bind_port:%s*(%d+)")
                 if not port then
-                    -- 匹配 IPv4 + 端口 (0.0.0.0:3000 / 127.0.0.1:3000)
+                    -- 匹配 IPv4 + 端口 (0.0.0.0:3000 / 127.0.0.1:3000) / Match IPv4 + port (0.0.0.0:3000 / 127.0.0.1:3000)
                     port = content:match("http:.-address:%s*[%d%.]+:(%d+)")
                 end
                 if not port then
-                    -- 匹配 IPv6 + 端口 ([::]:3000 / [::1]:3000 / [fd00::1]:3000)
+                    -- 匹配 IPv6 + 端口 ([::]:3000 / [::1]:3000 / [fd00::1]:3000) / Match IPv6 + port ([::]:3000 / [::1]:3000 / [fd00::1]:3000)
                     port = content:match("http:.-address:%s*%[[%x:]-%]:(%d+)")
                 end
                 if not port then
-                    -- 匹配无 IP，只写端口的情况 (:3000)
+                    -- 匹配无 IP，只写端口的情况 (:3000) / Match the no-IP, port-only case (:3000)
                     port = content:match("http:.-address:%s*:(%d+)")
                 end
                 if port then
@@ -302,7 +302,7 @@ function do_action()
     end
 
     local time_str = os.date("%Y-%m-%d %H:%M:%S")
-    -- 单次同步动作重置清空日志文件（>），并将运行标准输出重定向回日志
+    -- 单次同步动作重置清空日志文件（>），并将运行标准输出重定向回日志 / Single sync action truncates the log file (>) and redirects stdout back into the log
     util.exec("echo '[" .. time_str .. "] Executing action: " .. action .. "' > " .. EXEC_LOG)
     local result = util.exec(cmd .. " 2>&1 | tee -a " .. EXEC_LOG)
     
@@ -481,7 +481,7 @@ function launch_core_upgrade(force)
     f:write(table.concat(L, "\n"))
     f:close()
     os.execute("chmod 755 " .. scrpath)
-    -- 注意：ShellRunner 脚本执行前清写 EXEC_LOG 由 shell 头部定义
+    -- 注意：ShellRunner 脚本执行前清写 EXEC_LOG 由 shell 头部定义 / Note: the pre-exec EXEC_LOG truncation for ShellRunner is defined in the shell header
     os.execute("sh " .. scrpath .. " 2>&1 &")
     return true
 end
@@ -544,7 +544,7 @@ function get_log()
     local log_body = ""
     local exec_has_content = false
 
-    -- 1. 中间层：读取面板动作/升级过程日志 (EXEC_LOG)
+    -- 1. 中间层：读取面板动作/升级过程日志 (EXEC_LOG) / 1. Middle layer: read the panel-action / upgrade-process log (EXEC_LOG)
     if fs.access(EXEC_LOG) then
         local data = fs.readfile(EXEC_LOG)
         if data and #data > 0 then
@@ -553,7 +553,7 @@ function get_log()
         end
     end
 
-    -- 2. 运行日志层：尝试 AdGuardHome 原生日志文件（截取尾部 100 行）
+    -- 2. 运行日志层：尝试 AdGuardHome 原生日志文件（截取尾部 100 行） / 2. Runtime-log layer: try AdGuardHome's native log files (last 100 lines)
     local run_log = ""
     local agh_logs = {
         "/opt/AdGuardHome/data/agh.log",
@@ -570,7 +570,7 @@ function get_log()
         end
     end
 
-    -- 3. 保底/混合层：无原生日志时从系统 logread 提取
+    -- 3. 保底/混合层：无原生日志时从系统 logread 提取 / 3. Fallback/mixed layer: extract from the system logread when no native log exists
     if run_log == "" then
         run_log = util.exec("logread -e 'AdGuardHome' 2>/dev/null | tail -n 50") or ""
         if run_log == "" then
@@ -578,7 +578,7 @@ function get_log()
         end
     end
 
-    -- 4. 日志混合拼接：运行日志追加至中间层下方
+    -- 4. 日志混合拼接：运行日志追加至中间层下方 / 4. Log merge: append the runtime log below the middle layer
     if run_log ~= "" then
         if log_body ~= "" then
             log_body = log_body .. "\n\n=== 系统/运行日志 (最新) ===\n" .. run_log
@@ -587,7 +587,7 @@ function get_log()
         end
     end
 
-    -- 5. 头部摘要层：附加 AGH 基础运行状态
+    -- 5. 头部摘要层：附加 AGH 基础运行状态 / 5. Header summary layer: attach AGH basic runtime status
     local bin_path = find_binary()
     local summary = ""
     if bin_path then
@@ -611,7 +611,9 @@ function get_log()
     http.write_json({ content = summary .. log_body })
 end
 
--- 清空中间层执行/升级日志（仅清空 EXEC_LOG，运行日志由系统/AGH 自身管理）
+-- 清空中间层执行/升级日志（仅 EXEC_LOG）。 / Clear the middle-layer exec/upgrade log (EXEC_LOG only).
+-- 注意：「系统/运行日志」（AGH 原生日志 + 系统 logread）属 AGH/系统自身，不在服务端删除； / Note: the "system/runtime log" (AGH native log + system logread) belongs to AGH/the system and is NOT deleted server-side;
+-- 前端点击「清空日志」时只清视图显示，刷新后由 fetchLog 重新拉取继续显示。 / When the frontend clicks "Clear Log" it only clears the view; after refresh fetchLog re-pulls and the log shows again.
 function clear_log()
     local f = io.open(EXEC_LOG, "w")
     if f then
@@ -693,7 +695,7 @@ function do_upgrade_dashboard()
     add("LOG='" .. EXEC_LOG .. "'")
     add("CHECKSUMS=\"$TMPDIR/checksums.sha256\"")
     add("")
-    add("mkdir -p \"$BACKUP_DIR\" \"$TMPDIR\"")
+    add("mkdir -p \"$TMPDIR\"")
     add("cleanup() { rm -rf \"$TMPDIR\" 2>/dev/null; rm -f \"${TMPDIR}_runner.sh\" 2>/dev/null; }")
     add("trap 'cleanup' EXIT INT TERM")
     add("")
@@ -802,6 +804,7 @@ function do_upgrade_dashboard()
     add("  f_reason=\"$1\"")
     add("  rollback_all")
     add("  echo \"=== dashboard upgrade FAILED: $f_reason ===\" >> \"$LOG\"")
+    add("  if [ -d \"$BACKUP_DIR\" ] && [ -z \"$(ls -A \"$BACKUP_DIR\" 2>/dev/null)\" ]; then rm -rf \"$BACKUP_DIR\" 2>/dev/null; fi")
     add("  exit 2")
     add("}")
     add("")
@@ -811,7 +814,7 @@ function do_upgrade_dashboard()
 
     for i = 1, #DASH_FILES do
         local f = DASH_FILES[i]
-        local tmp_path = "$TMPDIR/" .. f.base
+        local tmp_path = tmpdir .. "/" .. f.base
         add("download_one '" .. f.src .. "' '" .. tmp_path .. "' || fail_task 'download " .. f.src .. "'")
         add("verify_file '" .. tmp_path .. "' " .. tostring(f.min_size) .. " " .. f.kind .. " || fail_task 'verify " .. f.src .. "'")
         add("check_sha '" .. f.src .. "' '" .. tmp_path .. "' || fail_task 'sha " .. f.src .. "'")
@@ -820,11 +823,12 @@ function do_upgrade_dashboard()
     add("echo '>> Phase 2: backup & deploy' >> \"$LOG\"")
     for i = 1, #DASH_FILES do
         local f = DASH_FILES[i]
-        local tmp_path = "$TMPDIR/" .. f.base
+        local tmp_path = tmpdir .. "/" .. f.base
         add("deploy_one '" .. tmp_path .. "' '" .. f.dst .. "' || fail_task 'deploy " .. f.src .. "'")
     end
 
-    -- 阶段2.5: 在备份目录生成 restore.sh（与 install.sh 的 restore 逻辑一致）
+    -- 阶段2.5: 在备份目录生成 restore.sh（与 install.sh 的 restore 逻辑一致） / Phase 2.5: generate restore.sh in the backup dir (consistent with install.sh's restore logic)
+    add("mkdir -p \"$BACKUP_DIR\"")
     add("echo '>> Phase 2.5: generate restore.sh in backup dir' >> \"$LOG\"")
     local restore_lines = {
         "#!/bin/sh",
@@ -849,11 +853,11 @@ function do_upgrade_dashboard()
         "echo \"=== Restore dashboard from $BACKUP_DIR ===\"",
         "echo '>> 恢复面板文件...'",
     }
-    -- 按 DASH_FILES 的 dst -> 相对 BACKUP_DIR 的 rel 映射
+    -- 按 DASH_FILES 的 dst -> 相对 BACKUP_DIR 的 rel 映射 / Build the dst -> relative-to-BACKUP_DIR rel mapping from DASH_FILES
     for i = #DASH_FILES, 1, -1 do
         local f = DASH_FILES[i]
-        -- dst 形如 /usr/lib/lua/luci/controller/adguardhome.lua
-        -- rel 是 BACKUP_DIR 下相对路径（deploy_one 已按原 dst 完整路径备份）
+        -- dst 形如 /usr/lib/lua/luci/controller/adguardhome.lua / dst looks like /usr/lib/lua/luci/controller/adguardhome.lua
+        -- rel 是 BACKUP_DIR 下相对路径（deploy_one 已按原 dst 完整路径备份） / rel is the relative path under BACKUP_DIR (deploy_one already backed up by the full original dst path)
         local rel = f.dst  -- deploy_one 备份时用 "$BACKUP_DIR$e_dst" 作目标，所以 rel = e_dst
         table.insert(restore_lines, string.format("restore_one '%s' '%s'", rel, f.dst))
     end
@@ -867,7 +871,7 @@ function do_upgrade_dashboard()
     table.insert(restore_lines, "echo '=== 恢复完成（仅面板文件，AGH 核心未受影响）==='")
     table.insert(restore_lines, "echo '请刷新浏览器查看效果。'")
     local restore_body = table.concat(restore_lines, "\n")
-    -- 用 cat <<'EOF' 避免变量被 shell 解析（restore_body 内含 $ 需原样写入）
+    -- 用 cat <<'EOF' 避免变量被 shell 解析（restore_body 内含 $ 需原样写入） / Use cat <<'EOF' to prevent shell variable expansion (restore_body contains $ that must be written verbatim)
     add("cat > \"$BACKUP_DIR/restore.sh\" <<'AGH_RESTORE_EOF'")
     add(restore_body)
     add("AGH_RESTORE_EOF")
@@ -897,11 +901,11 @@ function do_upgrade_dashboard()
     http.write_json({ success = true })
 end
 
--- 备份根目录
+-- 备份根目录 / Backup root directory
 local BACKUP_ROOT = "/root"
 local BACKUP_PREFIX = "agh_backup_"
 
--- 列出所有 /root/agh_backup_* 备份目录（install / core / dashboard）
+-- 列出所有 /root/agh_backup_* 备份目录（install / core / dashboard） / List all /root/agh_backup_* backup dirs (install / core / dashboard)
 function list_backups()
     local backups = {}
     local handle = io.popen("ls -d " .. BACKUP_ROOT .. "/" .. BACKUP_PREFIX .. "* 2>/dev/null")
@@ -917,7 +921,7 @@ function list_backups()
         local restore = line .. "/restore.sh"
         local has_restore = fs.access(restore) and true or false
         local has_core = fs.access(line .. "/core/AdGuardHome") and true or false
-        -- 统计文件数和总大小
+        -- 统计文件数和总大小 / Count files and total size
         local count_out = util.exec("find '" .. line .. "' -type f 2>/dev/null | wc -l") or "0"
         local file_count = tonumber(count_out:match("(%d+)")) or 0
         local size_out = util.exec("du -sh '" .. line .. "' 2>/dev/null | awk '{print $1}'") or "?"
@@ -939,10 +943,10 @@ function list_backups()
     http.write_json({ backups = backups })
 end
 
--- 从指定备份目录恢复（优先执行备份目录内的 restore.sh，没有则报错）
+-- 从指定备份目录恢复（优先执行备份目录内的 restore.sh，没有则报错） / Restore from the given backup dir (prefer the backup's own restore.sh; error if absent)
 function restore_backup()
     local dir = post_value("dir") or ""
-    -- 安全检查：必须在 /root/agh_backup_* 下，禁止路径穿越
+    -- 安全检查：必须在 /root/agh_backup_* 下，禁止路径穿越 / Security check: must be under /root/agh_backup_*; forbid path traversal
     if not dir:match("^/root/agh_backup_[%w_-]+$") then
         http.prepare_content("application/json")
         http.write_json({ success = false, error = "invalid backup directory" })
@@ -959,15 +963,15 @@ function restore_backup()
         http.write_json({ success = false, error = "no restore.sh in this backup (可能是面板/核心升级的备份，仅 install 备份支持一键恢复)" })
         return
     end
-    -- 后台执行恢复脚本，输出写入执行日志（EXEC_LOG），前端 startLogPolling 轮询检测
-    -- 注意：必须与前端 confirmRestore 的完成判定一致（检测 '=== Restore from /root/agh_backup'）
+    -- 后台执行恢复脚本，输出写入执行日志（EXEC_LOG），前端 startLogPolling 轮询检测 / Run the restore script in the background; output goes to EXEC_LOG; the frontend startLogPolling polls for completion
+    -- 注意：必须与前端 confirmRestore 的完成判定一致（检测 '=== Restore from /root/agh_backup'） / Note: must match the frontend confirmRestore completion check (detects '=== Restore from /root/agh_backup')
     os.execute("echo '=== Restore from " .. dir .. " ===' > " .. EXEC_LOG)
     os.execute("sh " .. restore_script .. " >> " .. EXEC_LOG .. " 2>&1 &")
     http.prepare_content("application/json")
     http.write_json({ success = true })
 end
 
--- 删除指定备份目录
+-- 删除指定备份目录 / Delete the specified backup directory
 function delete_backup()
     local dir = post_value("dir") or ""
     if not dir:match("^/root/agh_backup_[%w_-]+$") then
