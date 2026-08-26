@@ -16,7 +16,8 @@ _gh_raw="$RAW_BASE"   # pure direct URL; never gets a proxy prefix / 纯直连�
 
 AGH_DIR="/opt/AdGuardHome"
 AGH_BIN="/opt/AdGuardHome/AdGuardHome"
-AGH_INSTALL_URL="https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh"
+AGH_INSTALL_URL_BASE="https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh"
+AGH_INSTALL_URL="$AGH_INSTALL_URL_BASE"
 
 # GitHub acceleration proxy list (optional for users in mainland CN) / GitHub 加速代理列表（国内用户可选）
 PROXY_LIST="
@@ -53,116 +54,139 @@ case "$_lang_choice" in
 esac
 echo ""
 
-# ── GitHub connectivity check & proxy selection ──
-# Test our own manifest.json (same domain, always exists) to avoid a false "direct unavailable".
-# 测试目标用本项目自身的 manifest.json（同域名、必定存在），避免误判直连不可用。
+# ── GitHub connectivity test & connection selection ──
+# Always test every candidate (direct + proxies) and show a table, letting the user pick ONE connection.
+# Downloads FIXEDLY use the selected connection (no silent proxy hop); only if the chosen connection
+# is unreachable do we re-run the test and let the user pick again.
+# 始终测试所有候选（直连 + 各代理）并展示表格，让用户选定「一个」连接。
+# 下载「固定」使用该连接（不再静默跳代理）；仅当选定连接不可达时，才重新测试并让用户改选。
 TEST_URL="https://raw.githubusercontent.com/${REPO}/${BRANCH}/manifest.json"
 
 PROXY_PREFIX=""
+CONNECTION_LABEL="$(_t "Direct" "直连")"
 
-if [ -n "$GITHUB_PROXY" ]; then
-    PROXY_PREFIX="$GITHUB_PROXY"
-    log "$(_t "Using proxy from GITHUB_PROXY env: $PROXY_PREFIX" "使用环境变量指定代理: $PROXY_PREFIX")"
-else
-    log "$(_t "Checking GitHub connectivity..." "检测 GitHub 连通性...")"
-    _t0=$(_now_ms)
-    # raw.githubusercontent.com can be intermittently slow/blocked (common in some networks).
-    # Retry a few times before declaring direct unavailable, to avoid false negatives from a single slow probe.
-    # raw.githubusercontent.com 可能间歇性限速/被封锁；多试几次再判定直连不可用，避免单次慢连接误判。
-    _direct_ok="0"
-    _attempt=0
+# Apply the selected connection to all GitHub URLs (idempotent: always recomputed from base, never double-prefixed)
+# 将选定连接应用到所有 GitHub URL（幂等：始终基于基址重算，不会重复加前缀）
+gh_apply_conn() {
+    if [ -n "$PROXY_PREFIX" ]; then
+        RAW_BASE="${PROXY_PREFIX}https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+        AGH_INSTALL_URL="${PROXY_PREFIX}${AGH_INSTALL_URL_BASE}"
+        GH_API_BASE="${PROXY_PREFIX}https://api.github.com"
+        echo "proxy=${PROXY_PREFIX}" > /etc/adguardhome-dashboard.proxy 2>/dev/null || true
+    else
+        RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+        AGH_INSTALL_URL="$AGH_INSTALL_URL_BASE"
+        GH_API_BASE="https://api.github.com"
+        rm -f /etc/adguardhome-dashboard.proxy 2>/dev/null || true
+    fi
+}
+
+# Test connectivity and prompt the user to select ONE connection
+# 测试连通性并提示用户选择「一个」连接
+gh_select_connection() {
+    echo ""
+    log "$(_t "Testing GitHub connectivity (direct + proxies)..." "正在测试 GitHub 连通性（直连 + 各代理）...")"
+
+    # Direct (lenient: retry up to 3× so a single slow probe isn't a false negative)
+    # 直连（宽松：重试 3 次，避免单次慢连接被误判为不可用）
+    _direct_ok="0"; _direct_ms="0"
+    _t0=$(_now_ms); _attempt=0
     while [ "$_attempt" -lt 3 ]; do
-        if curl -fsSL -m 12 -o /dev/null "$TEST_URL" 2>/dev/null; then
-            _direct_ok="1"; break
-        fi
+        if curl -fsSL -m 12 -o /dev/null "$TEST_URL" 2>/dev/null; then _direct_ok="1"; break; fi
         _attempt=$((_attempt + 1))
     done
-    if [ "$_direct_ok" = "1" ]; then
-        _elapsed=$(_elapsed_ms $_t0)
-        log "$(_t "GitHub direct OK (${_elapsed}ms)" "GitHub 直连正常 (${_elapsed}ms)")"
-    else
-        log "$(_t "GitHub direct failed (raw.githubusercontent.com may be blocked/slow on this network). Testing proxy nodes..." "GitHub 直连失败（raw.githubusercontent.com 在当前网络可能被封锁/限速）。正在测试代理节点...")"
+    if [ "$_direct_ok" = "1" ]; then _direct_ms=$(_elapsed_ms $_t0); fi
 
-        # Record each proxy's result in a temp file (path|status|ms) to avoid fragile string parsing
-        # 用临时文件记录每个代理的测试结果（path|status|ms），避免脆弱的字符串解析
-        _results_file=$(mktemp 2>/dev/null || echo "/tmp/agh_proxy_results_$$")
-        : > "$_results_file"
-
-        for proxy in $PROXY_LIST; do
-            _test_url="${proxy}${TEST_URL}"
-            _t1=$(_now_ms)
-            if curl -fsSL -m 10 -o /dev/null "$_test_url" 2>/dev/null; then
-                echo "${proxy}|ok|$(_elapsed_ms $_t1)" >> "$_results_file"
-            else
-                echo "${proxy}|fail|0" >> "$_results_file"
-            fi
-        done
-
-        echo ""
-        echo "  #   $(_t "Proxy node" "代理节点")          $(_t "Status" "状态")"
-        echo "  ----------------------------------"
-        echo "  1)  $(_t "Direct" "直连")              ✗ $(_t "unavailable" "不可用")"
-
-        _idx=2
-        while IFS='|' read -r _p _s _ms; do
-            [ -z "$_p" ] && continue
-            _domain=$(echo "$_p" | sed 's|https\{0,1\}://||;s|/$||')
-            if [ "$_s" = "ok" ]; then
-                printf "  %d)  %-18s ✓ %sms\n" "$_idx" "$_domain" "$_ms"
-            else
-                printf "  %d)  %-18s ✗ %s\n" "$_idx" "$_domain" "$(_t "timeout" "超时")"
-            fi
-            _idx=$((_idx + 1))
-        done < "$_results_file"
-
-        CUSTOM_OPT=$_idx
-        echo "  ${CUSTOM_OPT})  $(_t "Custom proxy URL" "自定义代理 URL")"
-        echo ""
-        echo "  $(_t "Note: connectivity test is for reference only; DNS hijacking/transparent proxy may affect accuracy" "注意：连通性测试仅供参考，DNS 劫持/透明代理可能导致测试不准")"
-        echo ""
-        printf "$(_t "Select [1-%d, default 2]: " "请选择 [1-%d，默认 2]: ")" "$CUSTOM_OPT"
-        read -r PROXY_CHOICE
-        PROXY_CHOICE=${PROXY_CHOICE:-2}
-
-        if [ "$PROXY_CHOICE" = "$CUSTOM_OPT" ]; then
-            printf "$(_t "Enter custom proxy URL (e.g. https://gh.proxy.com/): " "请输入自定义代理 URL (例: https://gh.proxy.com/): ")"
-            read -r USER_PROXY
-            # Ensure it ends with a slash / 确保以斜杠结尾
-            case "$USER_PROXY" in
-                */) PROXY_PREFIX="$USER_PROXY" ;;
-                *)  PROXY_PREFIX="${USER_PROXY}/" ;;
-            esac
-            log "$(_t "Using custom proxy: $PROXY_PREFIX" "使用自定义代理: $PROXY_PREFIX")"
-        elif [ "$PROXY_CHOICE" != "1" ]; then
-            _i=1
-            _picked=""
-            while IFS='|' read -r _p _s _ms; do
-                if [ "$_i" = "$((PROXY_CHOICE - 1))" ] && [ "$_s" = "ok" ]; then
-                    PROXY_PREFIX="$_p"
-                    _picked="yes"
-                    break
-                fi
-                _i=$((_i + 1))
-            done < "$_results_file"
-            if [ -n "$PROXY_PREFIX" ] && [ "$_picked" = "yes" ]; then
-                log "$(_t "Using proxy: $PROXY_PREFIX" "使用代理: $PROXY_PREFIX")"
-            else
-                log "$(_t "Invalid choice or node unavailable, using direct" "无效选择或该节点不可用，使用直连")"
-            fi
+    # Each proxy (single attempt) / 各代理（单次探测）
+    _results_file=$(mktemp 2>/dev/null || echo "/tmp/agh_proxy_results_$$")
+    : > "$_results_file"
+    for _proxy in $PROXY_LIST; do
+        _t1=$(_now_ms)
+        if curl -fsSL -m 10 -o /dev/null "${_proxy}${TEST_URL}" 2>/dev/null; then
+            echo "${_proxy}|ok|$(_elapsed_ms $_t1)" >> "$_results_file"
+        else
+            echo "${_proxy}|fail|0" >> "$_results_file"
         fi
-        rm -f "$_results_file" 2>/dev/null
-    fi
-fi
+    done
 
-# Apply the proxy to all GitHub URLs / 应用代理到所有 GitHub URL
-if [ -n "$PROXY_PREFIX" ]; then
-    RAW_BASE="${PROXY_PREFIX}https://raw.githubusercontent.com/${REPO}/${BRANCH}"
-    AGH_INSTALL_URL="${PROXY_PREFIX}${AGH_INSTALL_URL}"
-    GH_API_BASE="${PROXY_PREFIX}https://api.github.com"
-    echo "proxy=${PROXY_PREFIX}" > /etc/adguardhome-dashboard.proxy 2>/dev/null || true
+    # Build the table / 展示表格
+    echo ""
+    echo "  #   $(_t "Node" "节点")                  $(_t "Status" "状态")"
+    echo "  --------------------------------------------"
+    _default_choice=""
+    if [ "$_direct_ok" = "1" ]; then
+        printf "  1)  %-18s ✓ %sms\n" "$(_t "Direct" "直连")" "$_direct_ms"
+        _default_choice=1
+    else
+        printf "  1)  %-18s ✗ %s\n" "$(_t "Direct" "直连")" "$(_t "unavailable" "不可用")"
+    fi
+    _idx=2; _first_ok=""
+    while IFS='|' read -r _p _s _ms; do
+        [ -z "$_p" ] && continue
+        _domain=$(echo "$_p" | sed 's|https\{0,1\}://||;s|/$||')
+        if [ "$_s" = "ok" ]; then
+            printf "  %d)  %-18s ✓ %sms\n" "$_idx" "$_domain" "$_ms"
+            if [ -z "$_first_ok" ]; then _first_ok=$_idx; fi
+        else
+            printf "  %d)  %-18s ✗ %s\n" "$_idx" "$_domain" "$(_t "timeout" "超时")"
+        fi
+        _idx=$((_idx + 1))
+    done < "$_results_file"
+    CUSTOM_OPT=$_idx
+    echo "  ${CUSTOM_OPT})  $(_t "Custom proxy URL" "自定义代理 URL")"
+    echo ""
+    echo "  $(_t "Note: connectivity test is for reference only; DNS hijacking/transparent proxy may affect accuracy" "注意：连通性测试仅供参考，DNS 劫持/透明代理可能导致测试不准")"
+    echo ""
+
+    # Default: direct if OK, else first OK proxy, else 2
+    # 默认：直连可用则默认直连，否则默认第一个可用代理，再否则 2
+    if [ -z "$_default_choice" ]; then
+        if [ -n "$_first_ok" ]; then _default_choice=$_first_ok; else _default_choice=2; fi
+    fi
+
+    printf "$(_t "Select connection [1-%d, default %d]: " "请选择连接 [1-%d，默认 %d]: ")" "$CUSTOM_OPT" "$_default_choice"
+    read -r CONN_CHOICE || true
+    CONN_CHOICE=${CONN_CHOICE:-$_default_choice}
+
+    if [ "$CONN_CHOICE" = "$CUSTOM_OPT" ]; then
+        printf "$(_t "Enter custom proxy URL (e.g. https://gh.proxy.com/): " "请输入自定义代理 URL (例: https://gh.proxy.com/): ")"
+        read -r USER_PROXY || true
+        case "$USER_PROXY" in
+            */) PROXY_PREFIX="$USER_PROXY" ;;
+            *)  PROXY_PREFIX="${USER_PROXY}/" ;;
+        esac
+        CONNECTION_LABEL="$PROXY_PREFIX"
+    elif [ "$CONN_CHOICE" = "1" ]; then
+        PROXY_PREFIX=""
+        CONNECTION_LABEL="$(_t "Direct" "直连")"
+    else
+        _i=2; _picked=""
+        while IFS='|' read -r _p _s _ms; do
+            if [ "$_i" = "$CONN_CHOICE" ] && [ "$_s" = "ok" ]; then
+                PROXY_PREFIX="$_p"; _picked="yes"; CONNECTION_LABEL="$PROXY_PREFIX"; break
+            fi
+            _i=$((_i + 1))
+        done < "$_results_file"
+        if [ "$_picked" != "yes" ]; then
+            PROXY_PREFIX=""; CONNECTION_LABEL="$(_t "Direct" "直连")"
+            log "$(_t "Selected node unavailable, using Direct" "所选节点不可用，改用直连")"
+        fi
+    fi
+    rm -f "$_results_file" 2>/dev/null
+
+    gh_apply_conn
+    log "$(_t "Using connection: $CONNECTION_LABEL" "使用的连接: $CONNECTION_LABEL")"
+}
+
+# If GITHUB_PROXY env is explicitly set, honor it without prompting (override)
+# 若显式设置 GITHUB_PROXY 环境变量，则直接使用（覆盖交互选择）
+if [ -n "$GITHUB_PROXY" ]; then
+    PROXY_PREFIX="$GITHUB_PROXY"
+    CONNECTION_LABEL="$PROXY_PREFIX"
+    gh_apply_conn
+    log "$(_t "Using proxy from GITHUB_PROXY env: $PROXY_PREFIX" "使用环境变量指定代理: $PROXY_PREFIX")"
 else
-    GH_API_BASE="https://api.github.com"
-    rm -f /etc/adguardhome-dashboard.proxy 2>/dev/null || true
+    gh_select_connection
 fi
 
 # ═══════════════════════════════════════════════════════════
@@ -270,48 +294,44 @@ download_from_github() {
             log "  ✓ $fname"
             return 0
         fi
-        for _p in $PROXY_LIST; do
-            if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
-                -o "$dest" "${_p}${_gh_raw}/${path}?_cb=${_cb}" 2>/dev/null; then
-                log "  ✓ $fname (via $(echo "$_p" | sed 's|https\{0,1\}://||;s|/$||'))"
-                return 0
-            fi
-        done
-        if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
-            -o "$dest" "${_gh_raw}/${path}?_cb=${_cb}" 2>/dev/null; then
-            log "  ✓ $fname (direct)"
-            return 0
-        fi
-        log "  ✗ $(_t "Download failed: $fname (both direct and all proxies failed)" "下载失败: $fname（直连和所有代理均失败）")"
-        log "  $(_t "Hint: use GITHUB_PROXY=https://ghfast.top/ to force a proxy" "提示: 可使用 GITHUB_PROXY=https://ghfast.top/ 环境变量强制指定代理")"
-        rm -rf "$TMPDIR"
-        exit 1
+        log "  ✗ $(_t "Download failed: $fname (connection '$CONNECTION_LABEL' unreachable)" "下载失败: $fname（连接 '$CONNECTION_LABEL' 不可达）")"
+        return 1
     }
-    dl "files/luci/controller/adguardhome.lua"                     "$DOWNLOAD_DIR/luci/controller/adguardhome.lua"
-    dl "files/luci/menu.d/luci-app-adguardhome-dashboard.json"     "$DOWNLOAD_DIR/luci/menu.d/luci-app-adguardhome-dashboard.json"
-    dl "files/luci/acl.json"                                       "$DOWNLOAD_DIR/luci/acl.json"
-    dl "files/view/dashboard.js"                                   "$DOWNLOAD_DIR/view/dashboard.js"
-    dl "files/luci/i18n/adguardhome.lmo"                           "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo"
-    dl "files/luci/i18n/adguardhome.zh-cn.lmo"                     "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo"
-    dl "manifest.json"                                              "$DOWNLOAD_DIR/manifest.json"
-    # checksums: direct first (authoritative, no cache), proxy fallback
-    # 校验和清单：优先直连（权威、无缓存），失败再试代理
+    _fail=0
+    dl "files/luci/controller/adguardhome.lua"                     "$DOWNLOAD_DIR/luci/controller/adguardhome.lua" || _fail=1
+    dl "files/luci/menu.d/luci-app-adguardhome-dashboard.json"     "$DOWNLOAD_DIR/luci/menu.d/luci-app-adguardhome-dashboard.json" || _fail=1
+    dl "files/luci/acl.json"                                       "$DOWNLOAD_DIR/luci/acl.json" || _fail=1
+    dl "files/view/dashboard.js"                                   "$DOWNLOAD_DIR/view/dashboard.js" || _fail=1
+    dl "files/luci/i18n/adguardhome.lmo"                           "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo" || _fail=1
+    dl "files/luci/i18n/adguardhome.zh-cn.lmo"                     "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo" || _fail=1
+    dl "manifest.json"                                             "$DOWNLOAD_DIR/manifest.json" || _fail=1
+    # checksums: use the selected connection only (no silent proxy hop)
+    # 校验和清单：仅使用选定的连接（不静默跳代理）
     if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
-        -o "$DOWNLOAD_DIR/checksums.sha256" "${_gh_raw}/checksums.sha256?_cb=${_cb}" 2>/dev/null; then
-        log "  ✓ checksums.sha256 (direct)"
+        -o "$DOWNLOAD_DIR/checksums.sha256" "${RAW_BASE}/checksums.sha256?_cb=${_cb}" 2>/dev/null; then
+        log "  ✓ checksums.sha256"
     else
-        _cs_ok=0
-        for _p in $PROXY_LIST; do
-            if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
-                -o "$DOWNLOAD_DIR/checksums.sha256" "${_p}${_gh_raw}/checksums.sha256?_cb=${_cb}" 2>/dev/null; then
-                log "  ✓ checksums.sha256 (via $(echo "$_p" | sed 's|https\{0,1\}://||;s|/$||'))"
-                _cs_ok=1
-                break
-            fi
-        done
-        [ "$_cs_ok" = "1" ] || log "  $(_t "Warning: checksums.sha256 download failed, will use semantic feature check only" "警告: checksums.sha256 下载失败，将仅做语义特征校验")"
+        log "  $(_t "Warning: checksums.sha256 download failed via '$CONNECTION_LABEL', will use semantic feature check only" "警告: checksums.sha256 经 '$CONNECTION_LABEL' 下载失败，将仅做语义特征校验")"
     fi
     log "$(_t "All files downloaded" "所有文件下载完成")"
+    return $_fail
+}
+
+# Download from GitHub with re-selection: FIXEDLY use the chosen connection; only if it fails
+# do we re-run the connectivity test and let the user pick another.
+# 固定使用所选连接下载；仅当该连接失败时，才重新测试并让用户改选。
+do_github_download() {
+    _att=0; _max=3
+    while true; do
+        if download_from_github; then return 0; fi
+        _att=$((_att + 1))
+        if [ "$_att" -ge "$_max" ]; then
+            log "$(_t "Download failed after trying $_max connections. Aborting." "已尝试 $_max 个连接仍下载失败，终止。")"
+            rm -rf "$TMPDIR"; exit 1
+        fi
+        log "$(_t "Selected connection '$CONNECTION_LABEL' failed. Please choose another connection." "所选连接 '$CONNECTION_LABEL' 失败，请重新选择连接。")"
+        gh_select_connection
+    done
 }
 
 if [ -f "$LOCAL_FILES/luci/controller/adguardhome.lua" ]; then
@@ -327,7 +347,7 @@ if [ -f "$LOCAL_FILES/luci/controller/adguardhome.lua" ]; then
     if [ "$SRC_CHOICE" = "2" ]; then
         log "$(_t "Deleting local project directory: $PROJECT_ROOT" "删除本地项目目录: $PROJECT_ROOT")"
         rm -rf "$PROJECT_ROOT"
-        download_from_github
+        do_github_download
     else
         log "$(_t "Copying local files..." "使用本地文件复制...")"
         cp "$LOCAL_FILES/luci/controller/adguardhome.lua" "$DOWNLOAD_DIR/luci/controller/"
@@ -339,7 +359,7 @@ if [ -f "$LOCAL_FILES/luci/controller/adguardhome.lua" ]; then
         cp "$PROJECT_ROOT/manifest.json" "$DOWNLOAD_DIR/manifest.json"
     fi
 else
-    download_from_github
+    do_github_download
 fi
 
 # ── Helper: compute sha256 (falls back to openssl where sha256sum is unavailable) ──
