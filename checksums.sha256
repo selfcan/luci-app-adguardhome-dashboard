@@ -1,4 +1,4 @@
-f74869faeca2c0e144c79dcd1e019cfe056da3120cf3b86eb8f3c635a006a18b  files/luci/controller/adguardhome.lua
+ad50976c2548d83e41f1997e042455b2bcbccae25bd5658deadbc55e130e72fb  files/luci/controller/adguardhome.lua
 35c8d7ca975549a3355fb232d0d8ded51c3936efe7c5804869c1e50de8df5233  files/luci/menu.d/luci-app-adguardhome-dashboard.json
 bbd122e27e4f9bf25b96e5aa25f3a68368a6ba72c837522c5af490ad4b9ab242  files/luci/acl.json
 282034918579d2367546c7fd33cc6fee2debe0a5e6a8c6ece3315ae20e9e8eb7  files/view/dashboard.js

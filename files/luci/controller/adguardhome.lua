@@ -63,24 +63,17 @@ local function get_persisted_proxy()
 end
 
 local function load_proxies()
+    -- 严格遵守 UI 中的代理选择：只使用用户持久化的代理，不再无条件追加内置代理。
+    -- Strictly honor the UI proxy selection: only use the persisted proxy; do NOT
+    -- unconditionally append built-in proxies.
+    --   - 选择 direct(空)  → 仅直连，不使用任何代理
+    --   - 指定某代理       → 仅该代理（下载循环另含直连兜底），不使用其他未选代理
+    -- 此前无论选什么都会把 3 个内置代理塞进候选列表，导致选 direct 时后台仍走代理。
+    -- Previously all 3 built-in proxies were always appended, so even "direct" used proxies.
     PRIMARY_PROXY = get_persisted_proxy()
     PROXY_LIST = {}
     if PRIMARY_PROXY ~= "" then
         PROXY_LIST[#PROXY_LIST + 1] = PRIMARY_PROXY
-    end
-    local builtins = {
-        "https://ghfast.top/",
-        "https://gh-proxy.com/",
-        "https://kkgithub.com/"
-    }
-    for _, p in ipairs(builtins) do
-        local found = false
-        for _, existing in ipairs(PROXY_LIST) do
-            if existing == p then found = true; break end
-        end
-        if not found then
-            PROXY_LIST[#PROXY_LIST + 1] = p
-        end
     end
 end
 
@@ -752,6 +745,7 @@ function do_upgrade_dashboard()
     add("")
     add("download_one() {")
     add("  d_src=\"$1\"; d_out=\"$2\"")
+    add("  mkdir -p \"$(dirname \"$d_out\")\"")  -- 确保目标目录存在，避免 curl (23) write error / Ensure target dir exists to avoid curl (23) write error
     add("  d_rel=\"${BASE}${d_src}\"")
     add("  d_seen='__init__'")
     add("  for d_p in \"$PRIMARY_PROXY\" \"\" $PROXY_CANDIDATES; do")
