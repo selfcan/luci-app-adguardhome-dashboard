@@ -15,17 +15,17 @@ var _EN = {
     'Web 端口': 'Web Port',
     '管理入口': 'Management URL',
     '服务控制台': 'Service Console',
-    '版本更新': 'Version Update',
+    'AdGuardHome 版本': 'AdGuardHome Version',
     '日志查看器': 'Log Viewer',
     '启动服务': 'Start Service',
     '重启服务': 'Restart Service',
     '停止服务': 'Stop Service',
     '注册系统服务': 'Register System Service',
-    '检查更新': 'Check Update',
-    '检查中...': 'Checking...',
+    '检查 AdGuardHome 更新': 'Check AdGuardHome Update',
+    '检查 AdGuardHome 更新中...': 'Checking AdGuardHome Update...',
     '检查失败': 'Check failed',
-    '一键升级': 'Upgrade',
-    '强制重装': 'Force Reinstall',
+    '升级 AdGuardHome': 'Upgrade AdGuardHome',
+    '强制重装核心': 'Force Reinstall Core',
     '刷新日志': 'Refresh Log',
     '执行中...': 'Processing...',
     '操作执行成功': 'Operation succeeded',
@@ -49,8 +49,8 @@ var _EN = {
     '当前控制模式：': 'Control mode: ',
     'Init.d 系统服务级调用': 'Init.d System Service',
     'AdGuardHome 二进制直接控制（命令保底）': 'Binary Direct Control (Fallback)',
-    '当前版本：': 'Current: ',
-    '最新版本：': 'Latest: ',
+    '当前 AdGuardHome 版本：': 'Current AdGuardHome Version: ',
+    'AdGuardHome 最新版本：': 'AdGuardHome Latest Version: ',
     '✔ 已下载': '✔ Installed',
     '✖ 未发现程序 (请运行官网命令安装)': '✖ Not found (Run official install command)',
     '✖ 未安装': '✖ Not installed',
@@ -64,7 +64,7 @@ var _EN = {
     '⚠️ 未注册服务 (使用二进制保底控制)': '⚠ Not registered (Using binary fallback)',
     '● 正在运行': '● Running',
     '■ 已停止': '■ Stopped',
-    '已是最新版本': 'Already up to date',
+    'AdGuardHome 已是最新版本': 'AdGuardHome is up to date',
     '网络代理': 'Network Proxy',
     '切换代理后将实时生效，用于核心与面板的检查/升级请求': 'Selected proxy applies immediately for all update & upgrade requests',
     '直连 (Direct)': 'Direct',
@@ -79,7 +79,7 @@ var _EN = {
     '毫秒': 'ms',
     '面板版本': 'Dashboard Version',
     '检查面板更新': 'Check Dashboard',
-    '检查面板版本中...': 'Checking dashboard...',
+    '检查面板更新中...': 'Checking Dashboard Update...',
     '升级面板': 'Upgrade Dashboard',
     '面板最新版本：': 'Latest: ',
     '当前面板版本：': 'Current: ',
@@ -379,6 +379,13 @@ return view.extend({
         });
     },
 
+    sendSetProxy: function(proxy) {
+        var url = L.url('admin/services/adguardhome/set_proxy');
+        return request.post(url, { proxy: proxy == null ? '' : proxy }).then(function(res) {
+            return res.json();
+        });
+    },
+
     fetchLog: function() {
         return request.get(L.url('admin/services/adguardhome/log')).then(function(res) {
             return res.json();
@@ -439,21 +446,21 @@ return view.extend({
             class: 'btn cbi-button cbi-button-action',
             style: 'margin-right:10px',
             click: function() { self.checkUpdate(); }
-        }, T('检查更新'));
+        }, T('检查 AdGuardHome 更新'));
         this.checkUpdateBtn = checkUpdateBtn;
 
         var upgradeBtn = E('button', {
             class: 'btn cbi-button cbi-button-apply',
             style: 'display:none;margin-right:10px',
             click: function() { self.doUpgrade(false); }
-        }, T('一键升级'));
+        }, T('升级 AdGuardHome'));
         this.upgradeBtn = upgradeBtn;
 
         var forceBtn = E('button', {
             class: 'btn cbi-button cbi-button-reset',
             style: 'margin-right:10px',
             click: function() { self.doUpgrade(true); }
-        }, T('强制重装'));
+        }, T('强制重装核心'));
         this.forceBtn = forceBtn;
 
         /* ── Network proxy control ── */
@@ -681,12 +688,12 @@ return view.extend({
             ]),
 
             E('div', { class: 'cbi-section' }, [
-                E('h3', {}, T('版本更新')),
+                E('h3', {}, T('AdGuardHome 版本')),
                 E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [
                     E('div', { style: 'margin-bottom:12px;' }, [
-                        E('strong', {}, T('当前版本：')),
+                        E('strong', {}, T('当前 AdGuardHome 版本：')),
                         E('code', { style: 'margin-right:20px' }, versionStr),
-                        E('strong', {}, T('最新版本：')),
+                        E('strong', {}, T('AdGuardHome 最新版本：')),
                         latestVersionCode
                     ]),
                     checkUpdateBtn,
@@ -807,6 +814,12 @@ return view.extend({
                         self.testProxyOne(r.proxy);
                     });
                 }
+                /* 切换代理即时持久化：让 check / upgrade 请求真正使用所选代理 / Persist proxy selection on change so check & upgrade requests actually use it */
+                if (r.radioEl) {
+                    r.radioEl.addEventListener('change', function() {
+                        self.sendSetProxy(self.getProxyByKey(r.proxy)).catch(function() {});
+                    });
+                }
             })(items[i]);
         }
 
@@ -892,8 +905,10 @@ return view.extend({
         var self = this;
         if (this.dashCheckBtn) {
             this.dashCheckBtn.disabled = true;
-            this.dashCheckBtn.textContent = T('检查面板版本中...');
+            this.dashCheckBtn.textContent = T('检查面板更新中...');
         }
+        /* 检查过程/结果写入后端 EXEC_LOG，前端轮询日志查看器展示 / check process & result are written to EXEC_LOG; poll the log viewer to show them */
+        this.startLogPolling();
         return this.fetchDashboardUpdate().then(function(res) {
             var curr = (res && res.current_version) || T('未知');
             var latest = (res && res.latest_version) || T('未知');
@@ -1046,6 +1061,9 @@ return view.extend({
                         setTimeout(function() {
                             window.location.href = window.location.pathname + '?_t=' + new Date().getTime();
                         }, 2000);
+                    } else if (c.indexOf('=== check done ===') !== -1) {
+                        /* 检查完成：仅停止轮询，不刷新页面 / check finished: stop polling only, no page refresh */
+                        done = true;
                     }
                     if (done) {
                         clearInterval(self.logPollInterval);
@@ -1091,8 +1109,10 @@ return view.extend({
         var self = this;
         if (this.checkUpdateBtn) {
             this.checkUpdateBtn.disabled = true;
-            this.checkUpdateBtn.textContent = T('检查中...');
+            this.checkUpdateBtn.textContent = T('检查 AdGuardHome 更新中...');
         }
+        /* 检查过程/结果写入后端 EXEC_LOG，前端轮询日志查看器展示 / check process & result are written to EXEC_LOG; poll the log viewer to show them */
+        this.startLogPolling();
         return this.fetchUpdate().then(function(res) {
             var latest = (res && res.latest_version) || T('未知');
             if (self.latestVersionEl) self.latestVersionEl.textContent = latest;
@@ -1100,14 +1120,14 @@ return view.extend({
             if (latest && latest !== T('未知') && latest !== current && self.upgradeBtn) {
                 self.upgradeBtn.style.display = '';
             } else if (latest && latest !== T('未知') && latest === current && self.latestVersionEl) {
-                self.latestVersionEl.textContent = latest + ' (' + T('已是最新版本') + ')';
+                self.latestVersionEl.textContent = latest + ' (' + T('AdGuardHome 已是最新版本') + ')';
             }
         }).catch(function(err) {
             if (self.latestVersionEl) self.latestVersionEl.textContent = T('检查失败');
         }).then(function() {
             if (self.checkUpdateBtn) {
                 self.checkUpdateBtn.disabled = false;
-                self.checkUpdateBtn.textContent = T('检查更新');
+                self.checkUpdateBtn.textContent = T('检查 AdGuardHome 更新');
             }
         });
     },

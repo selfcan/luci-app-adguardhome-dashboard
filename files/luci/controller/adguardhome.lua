@@ -77,6 +77,25 @@ local function load_proxies()
     end
 end
 
+-- 解析本次请求实际使用的代理：优先采用 UI 实时选择（请求携带的 proxy 参数），
+-- 否则回退到持久化代理（install 写入 /etc/adguardhome-dashboard.proxy）。
+-- Resolve the effective proxy for THIS request: prefer the UI selection carried in the
+-- request, else fall back to the persisted proxy. Honors "切换代理实时生效" (immediate effect).
+local function resolve_proxy()
+    local p = http.formvalue("proxy")
+    if p and is_safe_proxy(p) then
+        PRIMARY_PROXY = p
+        PROXY_LIST = { p }
+        return
+    end
+    load_proxies()
+end
+
+-- 当指向一个文件路径时，try_with_proxies 会把每次探测尝试写入该日志（仅 check 端点使用，
+-- 用于在前端日志查看器里展示"测试过程"）。/ When set to a file path, try_with_proxies logs
+-- each attempt to it (used only by check endpoints, to show the test process in the log viewer).
+local TRY_LOG = nil
+
 local function is_safe_proxy(p)
     if p == nil then return false end
     if p == "" then return true end
@@ -89,6 +108,9 @@ local function try_with_proxies(url, expect_json)
     local expect = expect_json or false   -- true = 必须是合法 JSON（非 HTML/404 页）
     local tried = {}
     local function attempt(target, timeout)
+        if TRY_LOG then
+            util.exec("echo '  trying: " .. target .. "' >> " .. TRY_LOG)
+        end
         local out = util.exec("curl -m " .. timeout .. " -fsSL '" .. target .. "' 2>/dev/null")
         if not out or #out < 10 then return nil end
         -- 过滤掉 GitHub 返回的 403/404 HTML 错误页（curl -f 应该拦截但某些代理会篡改响应码） / Drop 403/404 HTML error pages returned by GitHub (curl -f should block these, but some proxies tamper with the status code)
@@ -304,12 +326,23 @@ function do_action()
 end
 
 function check_update()
-    load_proxies()
+    resolve_proxy()
+    local time_str = os.date("%Y-%m-%d %H:%M:%S")
+    local pinfo = (PRIMARY_PROXY ~= "") and PRIMARY_PROXY or "direct"
+    TRY_LOG = EXEC_LOG
+    util.exec("echo '[" .. time_str .. "] Check AdGuardHome update (proxy=" .. pinfo .. ")' > " .. EXEC_LOG)
     local output = try_with_proxies("https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest", true)
+    TRY_LOG = nil
     local latest = ""
     if output and #output > 0 then
         latest = output:match('"tag_name"%s*:%s*"(.-)"') or ""
     end
+    if latest == "" then
+        util.exec("echo '  result: fetch failed (no reachable connection returned valid JSON)' >> " .. EXEC_LOG)
+    else
+        util.exec("echo '  result: latest = " .. latest .. "' >> " .. EXEC_LOG)
+    end
+    util.exec("echo '=== check done ===' >> " .. EXEC_LOG)
     http.prepare_content("application/json")
     http.write_json({ latest_version = latest })
 end
@@ -480,7 +513,7 @@ function launch_core_upgrade(force)
 end
 
 function do_upgrade()
-    load_proxies()
+    resolve_proxy()
     local force = post_value("force")
     launch_core_upgrade(force == "1")
     http.prepare_content("application/json")
@@ -634,10 +667,17 @@ local function semver_compare(a, b)
 end
 
 function check_dashboard_update()
-    load_proxies()
+    resolve_proxy()
+    local time_str = os.date("%Y-%m-%d %H:%M:%S")
+    local pinfo = (PRIMARY_PROXY ~= "") and PRIMARY_PROXY or "direct"
     local manifest_url = "https://raw.githubusercontent.com/" .. DASH_REPO .. "/" .. DASH_BRANCH .. "/manifest.json"
+    TRY_LOG = EXEC_LOG
+    util.exec("echo '[" .. time_str .. "] Check Dashboard update (proxy=" .. pinfo .. ")' > " .. EXEC_LOG)
     local body = try_with_proxies(manifest_url, true)
+    TRY_LOG = nil
     if not body or body == "" then
+        util.exec("echo '  result: fetch failed' >> " .. EXEC_LOG)
+        util.exec("echo '=== check done ===' >> " .. EXEC_LOG)
         http.prepare_content("application/json")
         http.write_json({
             current_version = get_installed_version(),
@@ -649,6 +689,8 @@ function check_dashboard_update()
     end
     local ver = body:match('"version"%s*:%s*"([^"]+)"')
     if not ver then
+        util.exec("echo '  result: parse failed' >> " .. EXEC_LOG)
+        util.exec("echo '=== check done ===' >> " .. EXEC_LOG)
         http.prepare_content("application/json")
         http.write_json({
             current_version = get_installed_version(),
@@ -658,6 +700,8 @@ function check_dashboard_update()
         })
         return
     end
+    util.exec("echo '  result: latest = " .. ver .. "' >> " .. EXEC_LOG)
+    util.exec("echo '=== check done ===' >> " .. EXEC_LOG)
     local cmp = semver_compare(get_installed_version(), ver)
     local need = (cmp and cmp < 0) or false
     http.prepare_content("application/json")
@@ -669,7 +713,7 @@ function check_dashboard_update()
 end
 
 function do_upgrade_dashboard()
-    load_proxies()
+    resolve_proxy()
     local ts = os.date("%Y%m%d_%H%M%S") or ("t" .. os.time())
     local backup_dir = "/root/agh_backup_dashboard_" .. ts
     local tmpdir = "/tmp/agh_dash_new_" .. ts
