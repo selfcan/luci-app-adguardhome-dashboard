@@ -445,6 +445,115 @@ function launch_core_upgrade(force)
     add("  return 1")
     add("}")
     add("")
+    -- 代理感知的「完整安装包」兜底升级：当 AdGuardHome --update（直连 static.adtidy.org）失败时使用。
+    -- 包改从 GitHub Releases 拉取（该域名可被所选 GitHub 代理代理），日志明确写出用了哪个代理/直连。
+    add([==[
+detect_pkg_suffix() {
+  local os cpu
+  case "$(uname -s)" in
+    Linux) os=linux ;;
+    Darwin) os=darwin ;;
+    FreeBSD) os=freebsd ;;
+    OpenBSD) os=openbsd ;;
+    *) os=linux ;;
+  esac
+  case "$(uname -m)" in
+    x86_64|x86-64|x64|amd64) cpu=amd64 ;;
+    i386|i486|i686|i786|x86) cpu=386 ;;
+    armv5l) cpu=armv5 ;;
+    armv6l) cpu=armv6 ;;
+    armv7l|armv8l) cpu=armv7 ;;
+    aarch64|arm64) cpu=arm64 ;;
+    mips|mips64)
+      cpu="mips"
+      if printf 'I' | hexdump -o 2>/dev/null | awk 'NR==1{print substr($2,6,1); exit}' | grep -q '1'; then
+        cpu="mipsle"
+      fi
+      cpu="${cpu}_softfloat"
+      ;;
+    riscv64) cpu=riscv64 ;;
+    *) cpu=amd64 ;;
+  esac
+  echo "${os}_${cpu}"
+}
+
+get_latest_agh_version() {
+  local seen='__init__' out v
+  for p in "$PRIMARY_PROXY" "" $PROXY_CANDIDATES; do
+    [ "$p" = "$seen" ] && continue
+    seen="$p"
+    local api; if [ -n "$p" ]; then api="${p}https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest"; else api="https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest"; fi
+    out=$(curl -m 10 -fsSL "$api" 2>/dev/null)
+    if [ -n "$out" ]; then
+      v=$(printf '%s' "$out" | grep -m1 '"tag_name"' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+      [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+    fi
+  done
+  local seen2='__init__'
+  for p in "$PRIMARY_PROXY" "" $PROXY_CANDIDATES; do
+    [ "$p" = "$seen2" ] && continue
+    seen2="$p"
+    local cl; if [ -n "$p" ]; then cl="${p}https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/CHANGELOG.md"; else cl="https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/CHANGELOG.md"; fi
+    out=$(curl -m 15 -fsSL "$cl" 2>/dev/null)
+    if [ -n "$out" ]; then
+      v=$(printf '%s' "$out" | awk 'BEGIN{incom=0} /<!--/{if($0 !~ /-->/) incom=1; next} /-->/{incom=0; next} !incom && /^##[[:space:]]*\[v?[0-9]+\.[0-9]+\.[0-9]+\]/{match($0,/v?[0-9]+\.[0-9]+\.[0-9]+/); print substr($0,RSTART,RLENGTH); exit}')
+      [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+    fi
+  done
+  return 1
+}
+
+download_pkg_via_proxy() {
+  local out="$1" ver="$2" os_cpu="$3"
+  local base="https://github.com/AdguardTeam/AdGuardHome/releases/download/${ver}/AdGuardHome_${os_cpu}.tar.gz"
+  local seen='__init__'
+  for p in "$PRIMARY_PROXY" "" $PROXY_CANDIDATES; do
+    [ "$p" = "$seen" ] && continue
+    seen="$p"
+    local url; if [ -n "$p" ]; then url="${p}${base}"; else url="$base"; fi
+    echo "   [fallback] try: $url" >> "$LOG"
+    if curl -m 60 -fsSL -o "$out" "$url" 2>>"$LOG"; then
+      [ -s "$out" ] && return 0
+    fi
+  done
+  return 1
+}
+
+fallback_upgrade_via_proxy() {
+  local ver os_cpu tmp newbin
+  ver=$(get_latest_agh_version)
+  if [ -z "$ver" ]; then
+    echo '   [fallback] cannot determine latest AGH version via proxy' >> "$LOG"
+    return 1
+  fi
+  os_cpu=$(detect_pkg_suffix)
+  echo "   [fallback] target version=$ver pkg=AdGuardHome_${os_cpu}.tar.gz" >> "$LOG"
+  tmp=$(mktemp -d 2>/dev/null)
+  [ -z "$tmp" ] && { echo '   [fallback] cannot create temp dir' >> "$LOG"; return 1; }
+  if download_pkg_via_proxy "$tmp/pkg.tar.gz" "$ver" "$os_cpu"; then
+    if tar -xzf "$tmp/pkg.tar.gz" -C "$tmp" 2>>"$LOG"; then
+      newbin=$(find "$tmp" -type f -name AdGuardHome 2>/dev/null | head -n1)
+      if [ -n "$newbin" ]; then
+        svc stop >> "$LOG" 2>&1 || pkill -f AdGuardHome 2>/dev/null
+        sleep 2
+        cp -f "$newbin" "$BIN_PATH" 2>>"$LOG" && chmod 755 "$BIN_PATH" 2>/dev/null
+        echo "   [fallback] replaced binary at $BIN_PATH (-> $ver)" >> "$LOG"
+        rm -rf "$tmp"
+        return 0
+      else
+        echo '   [fallback] AdGuardHome binary not found in archive' >> "$LOG"
+      fi
+    else
+      echo '   [fallback] extract failed' >> "$LOG"
+    fi
+  else
+    echo '   [fallback] package download failed via all proxies/direct' >> "$LOG"
+  fi
+  rm -rf "$tmp"
+  return 1
+}
+]==])
+    add("")
     add("echo '=== AdGuardHome core upgrade task started ===' > \"$LOG\"")
     add("")
     add("echo '>> Phase 1: backup current binary' >> \"$LOG\"")
@@ -474,9 +583,13 @@ function launch_core_upgrade(force)
     add("    UPGRADE_RC=1")
     add("  fi")
     add("elif [ -n \"$BIN_PATH\" ]; then")
-    add("  echo '   mode: AdGuardHome --update' >> \"$LOG\"")
+    add("  echo '   mode: AdGuardHome --update (proxy NOT applied; package fetched DIRECT from static.adtidy.org)' >> \"$LOG\"")
     add("  \"$BIN_PATH\" --update >> \"$LOG\" 2>&1")
     add("  UPGRADE_RC=$?")
+    add("  if [ \"$UPGRADE_RC\" != \"0\" ]; then")
+    add("    echo '   [fallback] AdGuardHome --update failed (rc='\"$UPGRADE_RC\"'); trying proxy-aware package download + overwrite' >> \"$LOG\"")
+    add("    if fallback_upgrade_via_proxy; then UPGRADE_RC=0; else UPGRADE_RC=1; fi")
+    add("  fi")
     add("else")
     add("  echo '   mode: install script (no existing binary)' >> \"$LOG\"")
     add("  if fetch_installer \"$TMP_INST\"; then")
