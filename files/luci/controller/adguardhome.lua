@@ -520,6 +520,8 @@ download_pkg_via_proxy() {
 }
 
 fallback_upgrade_via_proxy() {
+  local dst="${1:-$BIN_PATH}"
+  [ -z "$dst" ] && dst="${BIN_PATHS%% *}"
   local ver os_cpu tmp newbin
   ver=$(get_latest_agh_version)
   if [ -z "$ver" ]; then
@@ -536,8 +538,9 @@ fallback_upgrade_via_proxy() {
       if [ -n "$newbin" ]; then
         svc stop >> "$LOG" 2>&1 || pkill -f AdGuardHome 2>/dev/null
         sleep 2
-        cp -f "$newbin" "$BIN_PATH" 2>>"$LOG" && chmod 755 "$BIN_PATH" 2>/dev/null
-        echo "   [fallback] replaced binary at $BIN_PATH (-> $ver)" >> "$LOG"
+        mkdir -p "$(dirname "$dst")"
+        cp -f "$newbin" "$dst" 2>>"$LOG" && chmod 755 "$dst" 2>/dev/null
+        echo "   [fallback] replaced binary at $dst (-> $ver)" >> "$LOG"
         rm -rf "$tmp"
         return 0
       else
@@ -578,6 +581,10 @@ fallback_upgrade_via_proxy() {
     add("    sleep 2")
     add("    sh \"$TMP_INST\" -r >> \"$LOG\" 2>&1")
     add("    UPGRADE_RC=$?")
+    add("    if [ \"$UPGRADE_RC\" != \"0\" ]; then")
+    add("      echo '   [fallback] install.sh -r failed (rc='\"$UPGRADE_RC\"'); trying proxy-aware package download + overwrite' >> \"$LOG\"")
+    add("      if fallback_upgrade_via_proxy \"$BIN_PATH\"; then UPGRADE_RC=0; else UPGRADE_RC=1; fi")
+    add("    fi")
     add("  else")
     add("    echo '   [download failed] install.sh' >> \"$LOG\"")
     add("    UPGRADE_RC=1")
@@ -595,6 +602,10 @@ fallback_upgrade_via_proxy() {
     add("  if fetch_installer \"$TMP_INST\"; then")
     add("    sh \"$TMP_INST\" >> \"$LOG\" 2>&1")
     add("    UPGRADE_RC=$?")
+    add("    if [ \"$UPGRADE_RC\" != \"0\" ]; then")
+    add("      echo '   [fallback] install.sh failed (rc='\"$UPGRADE_RC\"'); trying proxy-aware package download' >> \"$LOG\"")
+    add("      if fallback_upgrade_via_proxy \"${BIN_PATHS%% *}\"; then UPGRADE_RC=0; else UPGRADE_RC=1; fi")
+    add("    fi")
     add("  else")
     add("    echo '   [download failed] install.sh' >> \"$LOG\"")
     add("    UPGRADE_RC=1")

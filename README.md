@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.5.5**
+**v2.5.6**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -291,6 +291,10 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ---
 
 ## Changelog
+
+- **v2.5.6**
+  - Extended the proxy-aware GitHub Releases fallback (previously added for `AdGuardHome --update`) to the force-reinstall (`install.sh -r`) and fresh-install paths. These previously fetched the binary package directly from `static.adtidy.org` (bypassing the selected proxy) with no fallback on failure; now they fall back to a proxy-aware package download + overwrite when `install.sh` fails
+  - `fallback_upgrade_via_proxy` now takes an explicit destination argument (defaults to `BIN_PATH`, or the first `BIN_PATHS` entry when unset), so the fresh-install path can place the binary correctly
 
 - **v2.5.5**
   - Proxy selection simplified to: test connectivity → pick by result (install: enter number; dashboard: click) → fixed for the session; only if the chosen connection actually fails mid-download does it re-prompt with a fresh connectivity test (install.sh)

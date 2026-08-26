@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.5.5**
+**v2.5.6**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -291,6 +291,10 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ---
 
 ## 变更记录 / Changelog
+
+- **v2.5.6**
+  - 将代理感知的 GitHub Releases 兜底（此前仅为 `AdGuardHome --update` 增加）扩展到强制重装（`install.sh -r`）与全新安装路径。这两条路径此前直接从 `static.adtidy.org` 拉取二进制包（绕过所选代理）且失败无兜底；现在当 `install.sh` 失败时自动回退到代理感知的包下载 + 覆盖写入
+  - `fallback_upgrade_via_proxy` 现接受显式目标路径参数（默认 `BIN_PATH`，为空时取首个 `BIN_PATHS` 条目），使全新安装路径也能正确落盘二进制
 
 - **v2.5.5**
   - 代理选型简化为：先测试连通性 → 按结果选择（install 输入序号 / dashboard 点选）→ 当次下载固定使用 → 仅当所选连接在下载中确实失败时，才用新的连通测试结果交互提示用户改选（install.sh）
