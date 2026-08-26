@@ -192,6 +192,9 @@ return view.extend({
     forceBtn: null,
     checkUpdateBtn: null,
     logEl: null,
+    logAccum: '',        /* 跨多次检查累计的日志（点击 check 不再清空，仅手动清空时重置） / accumulated log across checks; reset only on manual clear */
+    _lastRaw: '',        /* 上一次从服务端拉取的 EXEC_LOG 原文（用于增量合并） / last raw EXEC_LOG pulled from server (for incremental merge) */
+    MAX_LOG_LINES: 400,  /* 日志框最多展示的行数（滚动窗口） / max lines shown in the log box (scrolling window) */
 
     /* ── Proxy component ── */
     proxyGroup: 'agh_proxy_' + (Math.floor(Math.random() * 1e9)),
@@ -560,6 +563,9 @@ return view.extend({
             style: 'max-height:300px;overflow-y:auto;padding:10px;background:' + theme.logBg + ';color:' + theme.logColor + ';font-size:12px;line-height:1.4;border-radius:4px;white-space:pre-wrap;word-break:break-all'
         }, (logData && logData.content) || T('暂无日志'));
         this.logEl = logPre;
+        /* 用初始日志内容播种累计缓冲区，使页面加载时已有的日志作为首块保留 / Seed the accumulator with the initial log so pre-loaded content is kept as the first block */
+        this.logAccum = (logData && logData.content) || '';
+        this._lastRaw = this.logAccum;
 
         var refreshLogBtn = E('button', {
             class: 'btn cbi-button cbi-button-action',
@@ -831,6 +837,14 @@ return view.extend({
                     self.proxyCustomRadio.checked = true;
                 }
             });
+            /* 自定义代理输入提交（失焦/回车）后即时持久化，确保 reload 后仍在 / Persist the custom proxy on commit (blur/Enter) so it survives a page reload */
+            inp.addEventListener('change', function() {
+                if (self.proxyCustomRadio) self.proxyCustomRadio.checked = true;
+                var v = (inp.value || '').trim();
+                self.sendSetProxy(v).then(function(d) {
+                    if (d && d.success && self.statusData) self.statusData.proxy = v;
+                }).catch(function() {});
+            });
             inp.addEventListener('keydown', function(e) {
                 if (e.key === 'Enter' || e.keyCode === 13) { inp.blur(); }
             });
@@ -980,11 +994,48 @@ return view.extend({
         }, 5000);
     },
 
+    /* 把服务端拉取的 EXEC_LOG 增量合并进累计缓冲区：跨多次检查不丢失历史（除非手动清空） / Merge the pulled EXEC_LOG into the accumulated buffer: history survives across checks (until manual clear) */
+    _accumLog: function(raw) {
+        var acc = this.logAccum || '';
+        var last = this._lastRaw || '';
+        if (raw == null) return acc;
+        if (raw.length === 0) { this._lastRaw = raw; return acc; }
+        if (last.length === 0) {
+            this.logAccum = raw;
+            this._lastRaw = raw;
+            return raw;
+        }
+        if (raw.length > last.length && raw.indexOf(last) === 0) {
+            /* 同一次检查：服务端日志在末尾追加，只把新增部分并入累计 / same run: server log grew at the tail; merge only the new part */
+            this.logAccum = acc + raw.slice(last.length);
+        } else if (raw === last) {
+            /* 无变化 / unchanged */
+        } else {
+            /* 新一轮检查（服务端被清空后重新写入）：整段作为新块并入，避免重复 / new run (server truncated then rewrote): append whole block as a new run, avoid duplicates */
+            if (acc.length >= raw.length && acc.slice(-raw.length) === raw) {
+                /* 已在尾部，无需重复 / already at tail */
+            } else {
+                this.logAccum = acc + "\n" + raw;
+            }
+        }
+        this._lastRaw = raw;
+        return this.logAccum;
+    },
+
+    /* 取最后 N 行（滚动窗口），避免 DOM 无限增长 / Take the last N lines (scrolling window) to avoid unbounded DOM growth */
+    _tailLines: function(text, n) {
+        if (!text) return '';
+        var lines = text.split("\n");
+        if (lines.length <= n) return text;
+        return lines.slice(-n).join("\n");
+    },
+
     refreshLog: function() {
         var self = this;
         this.fetchLog().then(function(data) {
             if (self.logEl) {
-                self.logEl.textContent = (data && data.content) || T('暂无日志');
+                var acc = self._accumLog((data && data.content) || '');
+                self.logEl.textContent = self._tailLines(acc, self.MAX_LOG_LINES);
                 self.logEl.scrollTop = self.logEl.scrollHeight;
             }
         }).catch(function() {
@@ -1005,6 +1056,9 @@ return view.extend({
                    part 2 (system/AGH runtime log) belongs to the system and is not deleted server-side;
                    after refresh fetchLog re-pulls it. Here we only clear the current view. */
                 if (self.logEl) self.logEl.textContent = "";
+                /* 同时重置前端累计缓冲区，确保下次检查从头累计 / also reset the frontend accumulator so the next check starts fresh */
+                self.logAccum = "";
+                self._lastRaw = "";
             } else {
                 alert((d && d.error) || T('清空失败'));
             }
@@ -1041,7 +1095,8 @@ return view.extend({
             pollCount++;
             self.fetchLog().then(function(data) {
                 if (self.logEl && data && data.content) {
-                    self.logEl.textContent = data.content;
+                    var acc = self._accumLog(data.content);
+                    self.logEl.textContent = self._tailLines(acc, self.MAX_LOG_LINES);
                     self.logEl.scrollTop = self.logEl.scrollHeight;
                 }
                 if (data && data.content) {

@@ -955,7 +955,16 @@ function list_backups()
     for line in handle:lines() do
         local name = line:match("^.+/" .. BACKUP_PREFIX .. "(.+)$") or ""
         local btype = name:match("^([a-z]+)_") or "unknown"
-        local ts = name:match("^([0-9_%-]+)") or ""
+        -- 时间戳在 <type>_ 前缀之后（如 install_20260826_123501），精确匹配 YYYYMMDD_HHMMSS，并去掉可能带入的前导分隔符 / The timestamp sits after the <type>_ prefix (e.g. install_20260826_123501); match YYYYMMDD_HHMMSS precisely and strip any leading separator
+        local ts_raw = name:match("(%d%d%d%d%d%d%d%d_%d%d%d%d%d%d)$")
+            or name:match("([0-9_%-]+)$") or ""
+        ts_raw = ts_raw:gsub("^[_%-]+", "")
+        local ts = ts_raw
+        -- 把 20260826_123501 格式化为人读形式 2026-08-26 12:35:01 / format 20260826_123501 -> 2026-08-26 12:35:01
+        if ts_raw:match("^%d%d%d%d%d%d%d%d_%d%d%d%d%d%d$") then
+            ts = string.sub(ts_raw, 1, 4) .. "-" .. string.sub(ts_raw, 5, 6) .. "-" .. string.sub(ts_raw, 7, 8)
+               .. " " .. string.sub(ts_raw, 10, 11) .. ":" .. string.sub(ts_raw, 12, 13) .. ":" .. string.sub(ts_raw, 14, 15)
+        end
         local restore = line .. "/restore.sh"
         local has_restore = fs.access(restore) and true or false
         local has_core = fs.access(line .. "/core/AdGuardHome") and true or false
