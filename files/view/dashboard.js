@@ -204,7 +204,6 @@ return view.extend({
     proxyCustomRadio: null,
     proxyGlobalTestBtn: null,
     proxyBusy: false,
-    proxyAutoTestInterval: null,  /* 定时循环测试代理连通性的句柄 / handle for the periodic proxy connectivity test */
 
     /* 客户端防抖（防止用户连点 start/stop/restart/upgrade 等按钮产生重复请求） / Client-side debounce (prevent duplicate requests from rapid clicks on start/stop/restart/upgrade buttons) */
     _actionBusy: false,
@@ -726,16 +725,6 @@ return view.extend({
         /* 代理控件：预填 + 安全事件绑定 / Proxy control: prefill + safe event binding */
         this.prefillProxy(status.proxy || '');
         this.bindProxyEvents();
-
-        /* 定时循环测试代理连通性（每 60 秒），刷新各节点延迟/可用状态，让用户随时能看到当前可用情况 / Periodically test proxy connectivity (every 60s) to refresh latency/availability so the user always sees the current status */
-        this.proxyAutoTestInterval = setInterval(function() {
-            if (!self.rootNode || !document.body.contains(self.rootNode)) {
-                clearInterval(self.proxyAutoTestInterval);
-                self.proxyAutoTestInterval = null;
-                return;
-            }
-            self.testProxyAll();
-        }, 60000);
 
         // 自动触发核心与面板更新检查 + 加载备份列表 + 自动测试代理连通性（页面加载即测，让用户"心里有数"）
         // Auto-trigger core & panel update checks + load backup list + auto-test proxy connectivity (test on load so the user is informed)
