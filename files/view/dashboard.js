@@ -204,6 +204,7 @@ return view.extend({
     proxyCustomRadio: null,
     proxyGlobalTestBtn: null,
     proxyBusy: false,
+    proxyAutoTestInterval: null,  /* 定时循环测试代理连通性的句柄 / handle for the periodic proxy connectivity test */
 
     /* 客户端防抖（防止用户连点 start/stop/restart/upgrade 等按钮产生重复请求） / Client-side debounce (prevent duplicate requests from rapid clicks on start/stop/restart/upgrade buttons) */
     _actionBusy: false,
@@ -726,11 +727,23 @@ return view.extend({
         this.prefillProxy(status.proxy || '');
         this.bindProxyEvents();
 
-        // 自动触发核心与面板更新检查 + 加载备份列表 / Auto-trigger core & panel update checks + load backup list
+        /* 定时循环测试代理连通性（每 60 秒），刷新各节点延迟/可用状态，让用户随时能看到当前可用情况 / Periodically test proxy connectivity (every 60s) to refresh latency/availability so the user always sees the current status */
+        this.proxyAutoTestInterval = setInterval(function() {
+            if (!self.rootNode || !document.body.contains(self.rootNode)) {
+                clearInterval(self.proxyAutoTestInterval);
+                self.proxyAutoTestInterval = null;
+                return;
+            }
+            self.testProxyAll();
+        }, 60000);
+
+        // 自动触发核心与面板更新检查 + 加载备份列表 + 自动测试代理连通性（页面加载即测，让用户"心里有数"）
+        // Auto-trigger core & panel update checks + load backup list + auto-test proxy connectivity (test on load so the user is informed)
         setTimeout(function() {
             self.checkUpdate();
             self.checkDashboardUpdate();
             self.fetchBackups();
+            self.testProxyAll();
         }, 1000);
 
         return node;
@@ -1105,6 +1118,8 @@ return view.extend({
                     if (c.indexOf('FAILED') !== -1) {
                         done = true;
                         ui.addNotification(null, T('升级失败，已自动回滚；请检查日志与代理设置'), 'error');
+                        /* 升级失败通常是当前所选代理/直连在下载中不可用：重新测一遍连通性，让用户据此改选可用的代理再重试 / On failure the chosen proxy/direct likely died mid-download: re-test connectivity so the user can re-pick a working one and retry */
+                        self.testProxyAll();
                     } else if (c.indexOf('=== core upgrade done') !== -1
                             || c.indexOf('=== dashboard upgrade done') !== -1
                             || c.indexOf('=== core install done') !== -1

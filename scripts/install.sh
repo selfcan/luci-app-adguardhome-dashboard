@@ -103,21 +103,9 @@ gh_prompt_custom() {
     done
 }
 
-# 自动选择：先直连，再依次代理；全部失败则提示自定义代理并用其重试。
-# Auto-select: try Direct first, then each proxy; if ALL fail, prompt a custom proxy and retry.
-gh_auto_pick() {
-    if [ "$_direct_ok" = "1" ]; then
-        PROXY_PREFIX=""; CONNECTION_LABEL="$(_t "Direct" "直连")"; return 0
-    fi
-    while IFS='|' read -r _p _s _ms; do
-        [ -z "$_p" ] && continue
-        if [ "$_s" = "ok" ]; then
-            PROXY_PREFIX="$_p"; CONNECTION_LABEL="$_p"; return 0
-        fi
-    done < "$_results_file"
-    gh_prompt_custom
-    return $?
-}
+# 已移除自动顺序探测逻辑（auto-pick）：改为「测试后由用户按序号选择 → 当次固定使用 → 下载中确不可用才重新测试并交互改选」。
+# Auto-sequential probing (auto-pick) removed: now it is test -> user picks by number -> fixed for the session
+# -> re-test and let the user re-pick only when the chosen connection proves unusable during download.
 
 # Test connectivity and prompt the user to select ONE connection
 # 测试连通性并提示用户选择「一个」连接
@@ -168,35 +156,41 @@ gh_select_connection() {
         _idx=$((_idx + 1))
     done < "$_results_file"
     _custom_opt=$_idx
-    _auto_opt=$((_idx + 1))
     echo "  ${_custom_opt})  $(_t "Custom proxy URL" "自定义代理 URL")"
-    printf "  %d)  %s\n" "$_auto_opt" "$(_t "Auto-select (recommended): test all, pick first reachable (Direct first)" "自动选择（推荐）：依次测试，选第一个可用（先直连）")"
     echo ""
     echo "  $(_t "Note: connectivity test is for reference only; DNS hijacking/transparent proxy may affect accuracy" "注意：连通性测试仅供参考，DNS 劫持/透明代理可能导致测试不准")"
     echo ""
 
-    # 默认：自动选择（先直连，再依次代理，全部不可用才提示自定义）/ Default: Auto-select
-    _default_choice=$_auto_opt
+    # 默认：直连可达则默认直连；否则默认第一个可达代理；都不可达则默认自定义（回车即提示输入）
+    # Default: Direct if reachable, else first reachable proxy, else custom (Enter prompts for a URL)
+    if [ "$_direct_ok" = "1" ]; then
+        _default_choice=1
+    else
+        _default_choice=$_custom_opt
+        _i=2
+        while IFS='|' read -r _p _s _ms; do
+            [ -z "$_p" ] && continue
+            if [ "$_s" = "ok" ]; then _default_choice=$_i; break; fi
+            _i=$((_i + 1))
+        done < "$_results_file"
+    fi
 
-    # 交互选择：选中某节点则固定使用（不静默跳到其它节点）；失败可重选 / Interactive: fixed-use of chosen node; re-pick on failure
+    # 交互选择：选中某节点则固定使用（不静默跳到其它节点）；下载失败可交互重选 / Interactive: fixed-use of chosen node; re-pick on failure
     while true; do
-        printf "$(_t "Select connection [1-%d, default %d]: " "请选择连接 [1-%d，默认 %d]: ")" "$_auto_opt" "$_default_choice"
+        printf "$(_t "Select connection [1-%d, default %d]: " "请选择连接 [1-%d，默认 %d]: ")" "$_custom_opt" "$_default_choice"
         read -r CONN_CHOICE || true
         CONN_CHOICE=${CONN_CHOICE:-$_default_choice}
 
-        if [ "$CONN_CHOICE" = "$_auto_opt" ]; then
-            gh_auto_pick
-            if [ $? -eq 0 ]; then break
-            else
-                log "$(_t "No usable connection found; aborting." "未找到可用连接，终止。")"
-                rm -f "$_results_file" 2>/dev/null
-                return 1
-            fi
-        elif [ "$CONN_CHOICE" = "$_custom_opt" ]; then
+        if [ "$CONN_CHOICE" = "$_custom_opt" ]; then
             gh_prompt_custom
             if [ $? -eq 0 ]; then break
+            elif [ -t 0 ]; then
+                # 交互模式下留空 → 回到选择菜单，可改选直连/内置代理（不强制中止）
+                # Interactive: empty input -> back to the menu so they can pick Direct/built-in instead
+                log "$(_t "Custom proxy empty, please choose another option" "自定义代理为空，请选择其他选项")"
             else
-                log "$(_t "No custom proxy provided; aborting." "未提供自定义代理，终止。")"
+                # 非交互（stdin 非 TTY，如管道为空）下留空 → 直接中止，避免无限循环
+                # Non-interactive (non-TTY stdin, e.g. empty pipe): abort to avoid an infinite loop
                 rm -f "$_results_file" 2>/dev/null
                 return 1
             fi
@@ -337,7 +331,7 @@ download_from_github() {
     dl() {
         local path="$1" dest="$2"
         local fname=$(basename "$dest")
-        if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
+        if curl -fsSL -m 30 --connect-timeout 10 --retry 1 \
             -o "$dest" "${RAW_BASE}/${path}?_cb=${_cb}" 2>/dev/null; then
             log "  ✓ $fname"
             return 0
@@ -355,7 +349,7 @@ download_from_github() {
     dl "manifest.json"                                             "$DOWNLOAD_DIR/manifest.json" || _fail=1
     # checksums: use the selected connection only (no silent proxy hop)
     # 校验和清单：仅使用选定的连接（不静默跳代理）
-    if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
+    if curl -fsSL -m 30 --connect-timeout 10 --retry 1 \
         -o "$DOWNLOAD_DIR/checksums.sha256" "${RAW_BASE}/checksums.sha256?_cb=${_cb}" 2>/dev/null; then
         log "  ✓ checksums.sha256"
     else
@@ -365,19 +359,20 @@ download_from_github() {
     return $_fail
 }
 
-# Download from GitHub with re-selection: FIXEDLY use the chosen connection; only if it fails
-# do we re-run the connectivity test and let the user pick another.
-# 固定使用所选连接下载；仅当该连接失败时，才重新测试并让用户改选。
+# 固定使用所选连接下载；仅当该连接在下载中确实不可用时，才重新测试并交互让用户改选
+# （重选会同步重新测连通性并把结果显示在交互界面）。
+# FIXEDLY use the chosen connection; only if it proves unusable during download do we re-test
+# and let the user re-pick (re-selection re-tests connectivity and shows the results).
 do_github_download() {
-    _att=0; _max=3
+    _re=0; _max_re=5
     while true; do
         if download_from_github; then return 0; fi
-        _att=$((_att + 1))
-        if [ "$_att" -ge "$_max" ]; then
-            log "$(_t "Download failed after trying $_max times. Aborting." "已尝试 $_max 次仍下载失败，终止。")"
+        _re=$((_re + 1))
+        if [ "$_re" -ge "$_max_re" ]; then
+            log "$(_t "Download failed after $_max_re connection attempts. Aborting." "已尝试 $_max_re 次连接仍下载失败，终止。")"
             rm -rf "$TMPDIR"; exit 1
         fi
-        log "$(_t "Selected connection '$CONNECTION_LABEL' failed. Please re-select a connection." "所选连接 '$CONNECTION_LABEL' 失败，请重新选择连接。")"
+        log "$(_t "Selected connection '$CONNECTION_LABEL' failed during download. Re-selecting a connection (re-testing connectivity)..." "所选连接 '$CONNECTION_LABEL' 在下载中失败，正在重新测试并选择连接...")"
         if ! gh_select_connection; then
             log "$(_t "No connection selected; aborting." "未选择连接，终止。")"
             rm -rf "$TMPDIR"; exit 1
