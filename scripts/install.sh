@@ -4,6 +4,7 @@ set -e
 REPO="imonior/luci-app-adguardhome-dashboard"
 BRANCH="main"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+_gh_raw="$RAW_BASE"   # 纯直连地址，永不被代理前缀修改 / pure direct URL; never gets a proxy prefix
 
 AGH_DIR="/opt/AdGuardHome"
 AGH_BIN="/opt/AdGuardHome/AdGuardHome"
@@ -34,8 +35,8 @@ echo "========================================================="
 echo ""
 
 # ── GitHub 连通性检测 & 代理选择 ──────────────────── / GitHub connectivity check & proxy selection
-# 测试目标与实际下载用的域名一致：raw.githubusercontent.com / Test target matches the actual download domain: raw.githubusercontent.com
-TEST_URL="https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/README.md"
+# 测试目标用本项目自身的 manifest.json（同域名、必定存在），避免误判直连不可用 / Test our own manifest.json (same domain, always exists) to avoid false-negative on direct
+TEST_URL="https://raw.githubusercontent.com/${REPO}/${BRANCH}/manifest.json"
 
 PROXY_PREFIX=""
 
@@ -260,10 +261,10 @@ download_from_github() {
     dl "files/luci/i18n/adguardhome.lmo"                           "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo"
     dl "files/luci/i18n/adguardhome.zh-cn.lmo"                     "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo"
     dl "manifest.json"                                              "$DOWNLOAD_DIR/manifest.json"
-    # 下载校验和清单（内容指纹，用于 sha256 比对，防止代理缓存旧版本） / Download the checksum manifest (content fingerprint, used for sha256 comparison to prevent stale proxy-cached builds)
+    # 下载校验和清单：优先直连（权威、无缓存），失败再试代理 / checksums: direct first (authoritative, no cache), proxy fallback
     if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
-        -o "$DOWNLOAD_DIR/checksums.sha256" "${RAW_BASE}/checksums.sha256?_cb=${_cb}" 2>/dev/null; then
-        log "  ✓ checksums.sha256"
+        -o "$DOWNLOAD_DIR/checksums.sha256" "${_gh_raw}/checksums.sha256?_cb=${_cb}" 2>/dev/null; then
+        log "  ✓ checksums.sha256 (direct)"
     else
         _cs_ok=0
         for _p in $PROXY_LIST; do
@@ -344,7 +345,11 @@ verify_one() {
         manifest.json)
             grep -q '"version"' "$_f" 2>/dev/null || { log "  ✗ manifest.json 缺少 version 字段（代理缓存旧版？）"; _ok=0; } ;;
     esac
-    return $_ok
+    # _ok=1 表示通过、_ok=0 表示失败；但 shell 中 return 0=成功、return 1=失败，
+    # 故需取反：通过→0，失败→1。切勿直接 `return $_ok`（会导致合法文件被判失败、坏文件被放行）。
+    # _ok=1 means pass, _ok=0 means fail; shell return 0=success, 1=failure, so invert: pass→0, fail→1.
+    # Never use `return $_ok` directly (it would mark valid files as failed and let bad files through).
+    return $((1 - $_ok))
 }
 
 log "校验下载文件内容（sha256 指纹 + 语义特征，防止代理缓存旧版本）..."
@@ -357,10 +362,45 @@ verify_one "files/luci/i18n/adguardhome.lmo"                        "$DOWNLOAD_D
 verify_one "files/luci/i18n/adguardhome.zh-cn.lmo"                 "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo" || _fail=1
 verify_one "manifest.json"                                          "$DOWNLOAD_DIR/manifest.json" || _fail=1
 if [ "$_fail" = "1" ]; then
-    log "内容校验失败：极可能是代理/CDN 缓存了旧版本"
-    log "解决: 更换代理 GITHUB_PROXY=https://kkgithub.com/ 或 GITHUB_PROXY=https://gh-proxy.com/ 后重试"
-    rm -rf "$TMPDIR"
-    exit 1
+    log "内容校验失败，疑似代理/CDN 缓存了旧版本，正在改用直连重新下载并复验..."
+    _cb=$(date +%s 2>/dev/null || echo 0)
+    # 直连重新拉取校验和清单（权威、无缓存） / re-fetch checksums via direct (authoritative)
+    curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
+        -o "$DOWNLOAD_DIR/checksums.sha256" "${_gh_raw}/checksums.sha256?_cb=${_cb}" 2>/dev/null \
+        || log "  ⚠ 直连拉取 checksums.sha256 失败，仍用原文件复验"
+    # 直连重新拉取全部文件（排除代理/CDN 缓存） / re-fetch all files via direct (bypass proxy cache)
+    for _line in \
+        "files/luci/controller/adguardhome.lua|$DOWNLOAD_DIR/luci/controller/adguardhome.lua" \
+        "files/luci/menu.d/luci-app-adguardhome-dashboard.json|$DOWNLOAD_DIR/luci/menu.d/luci-app-adguardhome-dashboard.json" \
+        "files/luci/acl.json|$DOWNLOAD_DIR/luci/acl.json" \
+        "files/view/dashboard.js|$DOWNLOAD_DIR/view/dashboard.js" \
+        "files/luci/i18n/adguardhome.lmo|$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo" \
+        "files/luci/i18n/adguardhome.zh-cn.lmo|$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo" \
+        "manifest.json|$DOWNLOAD_DIR/manifest.json" ; do
+        _fp=${_line%%|*}; _fd=${_line##*|}
+        if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
+            -o "$_fd" "${_gh_raw}/${_fp}?_cb=${_cb}" 2>/dev/null; then
+            log "  ↻ 已用直连重新下载: $(basename "$_fd")"
+        else
+            log "  ⚠ 直连重新下载失败（保留原文件）: $(basename "$_fd")"
+        fi
+    done
+    # 复验 / re-verify
+    _fail=0
+    verify_one "files/luci/controller/adguardhome.lua"                  "$DOWNLOAD_DIR/luci/controller/adguardhome.lua" || _fail=1
+    verify_one "files/luci/menu.d/luci-app-adguardhome-dashboard.json" "$DOWNLOAD_DIR/luci/menu.d/luci-app-adguardhome-dashboard.json" || _fail=1
+    verify_one "files/luci/acl.json"                                    "$DOWNLOAD_DIR/luci/acl.json" || _fail=1
+    verify_one "files/view/dashboard.js"                                "$DOWNLOAD_DIR/view/dashboard.js" || _fail=1
+    verify_one "files/luci/i18n/adguardhome.lmo"                        "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo" || _fail=1
+    verify_one "files/luci/i18n/adguardhome.zh-cn.lmo"                 "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo" || _fail=1
+    verify_one "manifest.json"                                          "$DOWNLOAD_DIR/manifest.json" || _fail=1
+    if [ "$_fail" = "1" ]; then
+        log "内容校验失败：直连复验仍未通过"
+        log "解决: 请检查网络后重试；或手动从 https://github.com/${REPO} 下载发布包安装"
+        rm -rf "$TMPDIR"
+        exit 1
+    fi
+    log "  ✓ 已通过直连复验（已排除代理/CDN 缓存的旧版本）"
 fi
 log "  ✓ 内容校验通过（sha256 指纹 + 语义特征）"
 
