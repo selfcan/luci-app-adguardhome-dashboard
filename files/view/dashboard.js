@@ -1107,8 +1107,6 @@ return view.extend({
                     if (c.indexOf('FAILED') !== -1) {
                         done = true;
                         ui.addNotification(null, T('升级失败，已自动回滚；请检查日志与代理设置'), 'error');
-                        /* 升级失败通常是当前所选代理/直连在下载中不可用：重新测一遍连通性，让用户据此改选可用的代理再重试 / On failure the chosen proxy/direct likely died mid-download: re-test connectivity so the user can re-pick a working one and retry */
-                        self.testProxyAll();
                     } else if (c.indexOf('=== core upgrade done') !== -1
                             || c.indexOf('=== dashboard upgrade done') !== -1
                             || c.indexOf('=== core install done') !== -1
