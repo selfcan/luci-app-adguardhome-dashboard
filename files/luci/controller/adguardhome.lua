@@ -104,6 +104,16 @@ local function is_safe_proxy(p)
     return true
 end
 
+-- 把代理前缀规范化为「以 / 结尾」，避免用户漏写结尾斜杠导致拼接出非法 URL
+-- （如 https://ghfast.tophttps://...）。用于代理测试与版本/升级下载。
+-- Normalize a proxy prefix to end with '/', so a missing trailing slash can't produce
+-- an invalid concatenated URL (e.g. https://ghfast.tophttps://...). Used by proxy_test and try_with_proxies.
+local function proxify(p, url)
+    if p == nil or p == "" then return url end
+    if p:sub(-1) == "/" then return p .. url end
+    return p .. "/" .. url
+end
+
 local function try_with_proxies(url, expect_json)
     local expect = expect_json or false   -- true = 必须是合法 JSON（非 HTML/404 页）
     local tried = {}
@@ -128,21 +138,16 @@ local function try_with_proxies(url, expect_json)
         end
         return out
     end
+    -- 严格使用用户选定的代理：选中某代理则只走该代理，选中直连(direct/空)则只走直连，
+    -- 不再静默回退到直连或其它代理（避免“已选定的 proxy 自己跳”）。
+    -- 失败时返回空串，由调用方（check/upgrade 端点）明确报错，用户可改选代理重试。
     if PRIMARY_PROXY ~= "" then
-        local r = attempt(PRIMARY_PROXY .. url, 10)
+        local r = attempt(proxify(PRIMARY_PROXY, url), 10)
         if r then return r end
-        tried[PRIMARY_PROXY] = true
+        return ""
     end
     local r = attempt(url, 5)
     if r then return r end
-    tried[""] = true
-    for _, proxy in ipairs(PROXY_LIST) do
-        if not tried[proxy] then
-            local rr = attempt(proxy .. url, 10)
-            if rr then return rr end
-            tried[proxy] = true
-        end
-    end
     return ""
 end
 
@@ -553,7 +558,7 @@ function proxy_test()
         return
     end
     local test_url = "https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/README.md"
-    local target = (proxy == "") and test_url or (proxy .. test_url)
+    local target = proxify(proxy, test_url)
 
     local cmd = "curl -m 8 -fsSL -o /dev/null -w 'TIME:%{time_total}' '" .. target .. "' 2>/dev/null; echo 'EXIT:'$?"
     local out = util.exec(cmd) or ""
@@ -791,17 +796,18 @@ function do_upgrade_dashboard()
     add("  d_src=\"$1\"; d_out=\"$2\"")
     add("  mkdir -p \"$(dirname \"$d_out\")\"")  -- 确保目标目录存在，避免 curl (23) write error / Ensure target dir exists to avoid curl (23) write error
     add("  d_rel=\"${BASE}${d_src}\"")
-    add("  d_seen='__init__'")
-    add("  for d_p in \"$PRIMARY_PROXY\" \"\" $PROXY_CANDIDATES; do")
-    add("    [ \"$d_p\" = \"$d_seen\" ] && continue")
-    add("    d_seen=\"$d_p\"")
-    add("    if [ -n \"$d_p\" ]; then d_url=\"${d_p}${d_rel}\"; else d_url=\"$d_rel\"; fi")
+    add("  norm_proxy() { case \"$1\" in */) echo \"$1\"; *) echo \"$1/\";; esac; }")
+    add("  if [ -n \"$PRIMARY_PROXY\" ]; then")
+    add("    d_url=\"$(norm_proxy \"$PRIMARY_PROXY\")${d_rel}\"")
     add("    echo \"   try: $d_url\" >> \"$LOG\"")
-    add("    if curl -m 30 -fsSL -o \"$d_out\" \"$d_url\" 2>>\"$LOG\"; then")
-    add("      [ -s \"$d_out\" ] && { echo \"   ok: $d_src\" >> \"$LOG\"; return 0; }")
-    add("    fi")
-    add("  done")
-    add("  echo \"   [download failed] all candidates failed: $d_src\" >> \"$LOG\"")
+    add("    if curl -m 30 -fsSL -o \"$d_out\" \"$d_url\" 2>>\"$LOG\" && [ -s \"$d_out\" ]; then echo \"   ok: $d_src\" >> \"$LOG\"; return 0; fi")
+    add("    echo \"   [download failed] proxy '$PRIMARY_PROXY' unreachable: $d_src\" >> \"$LOG\"")
+    add("    return 1")
+    add("  fi")
+    add("  d_url=\"$d_rel\"")
+    add("  echo \"   try: $d_url\" >> \"$LOG\"")
+    add("  if curl -m 30 -fsSL -o \"$d_out\" \"$d_url\" 2>>\"$LOG\" && [ -s \"$d_out\" ]; then echo \"   ok: $d_src\" >> \"$LOG\"; return 0; fi")
+    add("  echo \"   [download failed] direct unreachable: $d_src\" >> \"$LOG\"")
     add("  return 1")
     add("}")
     add("")

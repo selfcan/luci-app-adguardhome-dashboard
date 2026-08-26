@@ -81,6 +81,44 @@ gh_apply_conn() {
     fi
 }
 
+# 提示输入自定义代理并测试；循环直到可用或留空（中止）。
+# Prompt for a custom proxy and test it; loop until reachable or empty (abort).
+gh_prompt_custom() {
+    while true; do
+        printf "$(_t "All known nodes unreachable. Enter a custom proxy URL (e.g. https://gh.proxy.com/), or leave empty to abort: " "所有已知节点均不可用。请输入自定义代理 URL（如 https://gh.proxy.com/），留空则中止: ")"
+        read -r USER_PROXY || true
+        USER_PROXY=$(echo "$USER_PROXY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [ -z "$USER_PROXY" ] && return 1
+        case "$USER_PROXY" in
+            */) PROXY_PREFIX="$USER_PROXY" ;;
+            *)  PROXY_PREFIX="${USER_PROXY}/" ;;
+        esac
+        CONNECTION_LABEL="$PROXY_PREFIX"
+        log "$(_t "Testing custom proxy: $PROXY_PREFIX" "正在测试自定义代理: $PROXY_PREFIX")"
+        if curl -fsSL -m 10 -o /dev/null "${PROXY_PREFIX}${TEST_URL}" 2>/dev/null; then
+            log "$(_t "Custom proxy reachable" "自定义代理可用")"
+            return 0
+        fi
+        log "$(_t "Custom proxy unreachable, please try another" "自定义代理不可用，请换一个")"
+    done
+}
+
+# 自动选择：先直连，再依次代理；全部失败则提示自定义代理并用其重试。
+# Auto-select: try Direct first, then each proxy; if ALL fail, prompt a custom proxy and retry.
+gh_auto_pick() {
+    if [ "$_direct_ok" = "1" ]; then
+        PROXY_PREFIX=""; CONNECTION_LABEL="$(_t "Direct" "直连")"; return 0
+    fi
+    while IFS='|' read -r _p _s _ms; do
+        [ -z "$_p" ] && continue
+        if [ "$_s" = "ok" ]; then
+            PROXY_PREFIX="$_p"; CONNECTION_LABEL="$_p"; return 0
+        fi
+    done < "$_results_file"
+    gh_prompt_custom
+    return $?
+}
+
 # Test connectivity and prompt the user to select ONE connection
 # 测试连通性并提示用户选择「一个」连接
 gh_select_connection() {
@@ -113,67 +151,77 @@ gh_select_connection() {
     echo ""
     echo "  #   $(_t "Node" "节点")                  $(_t "Status" "状态")"
     echo "  --------------------------------------------"
-    _default_choice=""
     if [ "$_direct_ok" = "1" ]; then
         printf "  1)  %-18s ✓ %sms\n" "$(_t "Direct" "直连")" "$_direct_ms"
-        _default_choice=1
     else
         printf "  1)  %-18s ✗ %s\n" "$(_t "Direct" "直连")" "$(_t "unavailable" "不可用")"
     fi
-    _idx=2; _first_ok=""
+    _idx=2
     while IFS='|' read -r _p _s _ms; do
         [ -z "$_p" ] && continue
         _domain=$(echo "$_p" | sed 's|https\{0,1\}://||;s|/$||')
         if [ "$_s" = "ok" ]; then
             printf "  %d)  %-18s ✓ %sms\n" "$_idx" "$_domain" "$_ms"
-            if [ -z "$_first_ok" ]; then _first_ok=$_idx; fi
         else
             printf "  %d)  %-18s ✗ %s\n" "$_idx" "$_domain" "$(_t "timeout" "超时")"
         fi
         _idx=$((_idx + 1))
     done < "$_results_file"
-    CUSTOM_OPT=$_idx
-    echo "  ${CUSTOM_OPT})  $(_t "Custom proxy URL" "自定义代理 URL")"
+    _custom_opt=$_idx
+    _auto_opt=$((_idx + 1))
+    echo "  ${_custom_opt})  $(_t "Custom proxy URL" "自定义代理 URL")"
+    printf "  %d)  %s\n" "$_auto_opt" "$(_t "Auto-select (recommended): test all, pick first reachable (Direct first)" "自动选择（推荐）：依次测试，选第一个可用（先直连）")"
     echo ""
     echo "  $(_t "Note: connectivity test is for reference only; DNS hijacking/transparent proxy may affect accuracy" "注意：连通性测试仅供参考，DNS 劫持/透明代理可能导致测试不准")"
     echo ""
 
-    # Default: direct if OK, else first OK proxy, else 2
-    # 默认：直连可用则默认直连，否则默认第一个可用代理，再否则 2
-    if [ -z "$_default_choice" ]; then
-        if [ -n "$_first_ok" ]; then _default_choice=$_first_ok; else _default_choice=2; fi
-    fi
+    # 默认：自动选择（先直连，再依次代理，全部不可用才提示自定义）/ Default: Auto-select
+    _default_choice=$_auto_opt
 
-    printf "$(_t "Select connection [1-%d, default %d]: " "请选择连接 [1-%d，默认 %d]: ")" "$CUSTOM_OPT" "$_default_choice"
-    read -r CONN_CHOICE || true
-    CONN_CHOICE=${CONN_CHOICE:-$_default_choice}
+    # 交互选择：选中某节点则固定使用（不静默跳到其它节点）；失败可重选 / Interactive: fixed-use of chosen node; re-pick on failure
+    while true; do
+        printf "$(_t "Select connection [1-%d, default %d]: " "请选择连接 [1-%d，默认 %d]: ")" "$_auto_opt" "$_default_choice"
+        read -r CONN_CHOICE || true
+        CONN_CHOICE=${CONN_CHOICE:-$_default_choice}
 
-    if [ "$CONN_CHOICE" = "$CUSTOM_OPT" ]; then
-        printf "$(_t "Enter custom proxy URL (e.g. https://gh.proxy.com/): " "请输入自定义代理 URL (例: https://gh.proxy.com/): ")"
-        read -r USER_PROXY || true
-        case "$USER_PROXY" in
-            */) PROXY_PREFIX="$USER_PROXY" ;;
-            *)  PROXY_PREFIX="${USER_PROXY}/" ;;
-        esac
-        CONNECTION_LABEL="$PROXY_PREFIX"
-    elif [ "$CONN_CHOICE" = "1" ]; then
-        PROXY_PREFIX=""
-        CONNECTION_LABEL="$(_t "Direct" "直连")"
-    else
-        _i=2; _picked=""
-        while IFS='|' read -r _p _s _ms; do
-            if [ "$_i" = "$CONN_CHOICE" ] && [ "$_s" = "ok" ]; then
-                PROXY_PREFIX="$_p"; _picked="yes"; CONNECTION_LABEL="$PROXY_PREFIX"; break
+        if [ "$CONN_CHOICE" = "$_auto_opt" ]; then
+            gh_auto_pick
+            if [ $? -eq 0 ]; then break
+            else
+                log "$(_t "No usable connection found; aborting." "未找到可用连接，终止。")"
+                rm -f "$_results_file" 2>/dev/null
+                return 1
             fi
-            _i=$((_i + 1))
-        done < "$_results_file"
-        if [ "$_picked" != "yes" ]; then
-            PROXY_PREFIX=""; CONNECTION_LABEL="$(_t "Direct" "直连")"
-            log "$(_t "Selected node unavailable, using Direct" "所选节点不可用，改用直连")"
+        elif [ "$CONN_CHOICE" = "$_custom_opt" ]; then
+            gh_prompt_custom
+            if [ $? -eq 0 ]; then break
+            else
+                log "$(_t "No custom proxy provided; aborting." "未提供自定义代理，终止。")"
+                rm -f "$_results_file" 2>/dev/null
+                return 1
+            fi
+        elif [ "$CONN_CHOICE" = "1" ]; then
+            if [ "$_direct_ok" = "1" ]; then
+                PROXY_PREFIX=""; CONNECTION_LABEL="$(_t "Direct" "直连")"; break
+            else
+                log "$(_t "Direct is unavailable, please choose another" "直连不可用，请重新选择")"
+            fi
+        else
+            _i=2; _picked=""
+            while IFS='|' read -r _p _s _ms; do
+                if [ "$_i" = "$CONN_CHOICE" ] && [ "$_s" = "ok" ]; then
+                    PROXY_PREFIX="$_p"; _picked="yes"; CONNECTION_LABEL="$PROXY_PREFIX"; break
+                fi
+                _i=$((_i + 1))
+            done < "$_results_file"
+            if [ "$_picked" = "yes" ]; then break
+            else
+                log "$(_t "Selected node is unavailable, please choose another" "所选节点不可用，请重新选择")"
+            fi
         fi
-    fi
-    rm -f "$_results_file" 2>/dev/null
+    done
 
+    rm -f "$_results_file" 2>/dev/null
     gh_apply_conn
     log "$(_t "Using connection: $CONNECTION_LABEL" "使用的连接: $CONNECTION_LABEL")"
 }
@@ -186,7 +234,7 @@ if [ -n "$GITHUB_PROXY" ]; then
     gh_apply_conn
     log "$(_t "Using proxy from GITHUB_PROXY env: $PROXY_PREFIX" "使用环境变量指定代理: $PROXY_PREFIX")"
 else
-    gh_select_connection
+    gh_select_connection || { log "$(_t "Connection setup aborted." "连接设置已中止。")"; exit 1; }
 fi
 
 # ═══════════════════════════════════════════════════════════
@@ -326,11 +374,14 @@ do_github_download() {
         if download_from_github; then return 0; fi
         _att=$((_att + 1))
         if [ "$_att" -ge "$_max" ]; then
-            log "$(_t "Download failed after trying $_max connections. Aborting." "已尝试 $_max 个连接仍下载失败，终止。")"
+            log "$(_t "Download failed after trying $_max times. Aborting." "已尝试 $_max 次仍下载失败，终止。")"
             rm -rf "$TMPDIR"; exit 1
         fi
-        log "$(_t "Selected connection '$CONNECTION_LABEL' failed. Please choose another connection." "所选连接 '$CONNECTION_LABEL' 失败，请重新选择连接。")"
-        gh_select_connection
+        log "$(_t "Selected connection '$CONNECTION_LABEL' failed. Please re-select a connection." "所选连接 '$CONNECTION_LABEL' 失败，请重新选择连接。")"
+        if ! gh_select_connection; then
+            log "$(_t "No connection selected; aborting." "未选择连接，终止。")"
+            rm -rf "$TMPDIR"; exit 1
+        fi
     done
 }
 
