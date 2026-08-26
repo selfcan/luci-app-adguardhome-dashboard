@@ -572,19 +572,16 @@ function proxy_test()
 end
 
 function get_log()
-    local log_body = ""
-    local exec_has_content = false
-
-    -- 1. 中间层：读取面板动作/升级过程日志 (EXEC_LOG) / 1. Middle layer: read the panel-action / upgrade-process log (EXEC_LOG)
+    -- 1. 执行/升级日志 (EXEC_LOG)：面板各按钮后台动作 / 升级过程记录 / 1. Exec/upgrade log: backend actions of each dashboard button + upgrade process
+    local exec_content = ""
     if fs.access(EXEC_LOG) then
         local data = fs.readfile(EXEC_LOG)
         if data and #data > 0 then
-            log_body = "=== 执行/升级日志 ===\n" .. data
-            exec_has_content = true
+            exec_content = data
         end
     end
 
-    -- 2. 运行日志层：尝试 AdGuardHome 原生日志文件（截取尾部 100 行） / 2. Runtime-log layer: try AdGuardHome's native log files (last 100 lines)
+    -- 2. 系统/运行日志：优先 AdGuardHome 原生日志（截尾 100 行），否则从系统 logread 提取 / 2. System/runtime log: prefer AGH native log (last 100 lines), else system logread
     local run_log = ""
     local agh_logs = {
         "/opt/AdGuardHome/data/agh.log",
@@ -600,8 +597,6 @@ function get_log()
             end
         end
     end
-
-    -- 3. 保底/混合层：无原生日志时从系统 logread 提取 / 3. Fallback/mixed layer: extract from the system logread when no native log exists
     if run_log == "" then
         run_log = util.exec("logread -e 'AdGuardHome' 2>/dev/null | tail -n 50") or ""
         if run_log == "" then
@@ -609,37 +604,24 @@ function get_log()
         end
     end
 
-    -- 4. 日志混合拼接：运行日志追加至中间层下方 / 4. Log merge: append the runtime log below the middle layer
-    if run_log ~= "" then
-        if log_body ~= "" then
-            log_body = log_body .. "\n\n=== 系统/运行日志 (最新) ===\n" .. run_log
-        else
-            log_body = run_log
-        end
-    end
-
-    -- 5. 头部摘要层：附加 AGH 基础运行状态 / 5. Header summary layer: attach AGH basic runtime status
+    -- 3. AdGuardHome 状态：版本 + 进程运行状态（前端「日志查看器」第一部分展示） / 3. AdGuardHome status: version + process state (shown in part 1 of the log viewer)
+    local status = ""
     local bin_path = find_binary()
-    local summary = ""
     if bin_path then
         local ver = util.exec(bin_path .. " --version 2>&1") or ""
         ver = ver:gsub("^%s+", ""):gsub("%s+$", "")
-        summary = "=== AdGuardHome 状态 ===\n" .. ver .. "\n"
+        status = ver
         local pid_out = util.exec("pgrep -f 'AdGuardHome' 2>/dev/null")
         if pid_out and pid_out:match("%d") then
-            summary = summary .. "PID: " .. (pid_out:match("(%d+)") or "N/A") .. " (running)\n"
+            status = status .. "\nPID: " .. (pid_out:match("(%d+)") or "N/A") .. " (running)"
         else
-            summary = summary .. "Status: stopped\n"
+            status = status .. "\nStatus: stopped"
         end
-        summary = summary .. "========================\n\n"
     end
 
-    if not log_body or log_body == "" then
-        log_body = "No logs available"
-    end
-
+    -- 分三段独立返回：前端各段固定位置渲染、互不干扰 / Return three separate fields so the frontend renders each in a fixed position, independently
     http.prepare_content("application/json")
-    http.write_json({ content = summary .. log_body })
+    http.write_json({ status = status, exec_log = exec_content, system_log = run_log })
 end
 
 -- 清空中间层执行/升级日志（仅 EXEC_LOG）。 / Clear the middle-layer exec/upgrade log (EXEC_LOG only).

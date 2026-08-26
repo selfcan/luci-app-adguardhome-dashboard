@@ -17,6 +17,10 @@ var _EN = {
     '服务控制台': 'Service Console',
     'AdGuardHome 版本': 'AdGuardHome Version',
     '日志查看器': 'Log Viewer',
+    'AdGuardHome 状态': 'AdGuardHome Status',
+    '执行 / 升级日志': 'Exec / Upgrade Log',
+    '系统 / 运行日志': 'System / Runtime Log',
+    '无状态信息': 'No status info',
     '启动服务': 'Start Service',
     '重启服务': 'Restart Service',
     '停止服务': 'Stop Service',
@@ -191,10 +195,14 @@ return view.extend({
     upgradeBtn: null,
     forceBtn: null,
     checkUpdateBtn: null,
-    logEl: null,
-    logAccum: '',        /* 跨多次检查累计的日志（点击 check 不再清空，仅手动清空时重置） / accumulated log across checks; reset only on manual clear */
-    _lastRaw: '',        /* 上一次从服务端拉取的 EXEC_LOG 原文（用于增量合并） / last raw EXEC_LOG pulled from server (for incremental merge) */
-    MAX_LOG_LINES: 400,  /* 日志框最多展示的行数（滚动窗口） / max lines shown in the log box (scrolling window) */
+    statusLogEl: null,   /* 第一部分：AdGuardHome 状态（直接清除重载） / part 1: AGH status (clear + reload) */
+    execLogEl: null,     /* 第二部分：执行/升级日志（滚动追加） / part 2: exec/upgrade log (scroll-append) */
+    sysLogEl: null,      /* 第三部分：系统/运行日志（滚动追加） / part 3: system/runtime log (scroll-append) */
+    execAccum: '',       /* 第二部分累计缓冲区（同名段增量合并，避免重复） / part 2 accumulator (incremental merge, no dup) */
+    execLast: '',        /* 第二部分上一次服务端原文（用于增量合并判定） / part 2 last raw pulled from server */
+    sysAccum: '',        /* 第三部分累计缓冲区 / part 3 accumulator */
+    sysLast: '',         /* 第三部分上一次服务端原文 / part 3 last raw from server */
+    MAX_LOG_LINES: 400,  /* 各段最多展示的行数（滚动窗口） / max lines per part (scrolling window) */
 
     /* ── Proxy component ── */
     proxyGroup: 'agh_proxy_' + (Math.floor(Math.random() * 1e9)),
@@ -402,7 +410,7 @@ return view.extend({
                 return { installed: false, service_installed: false, running: false, version: T('未知'), port: 3000 };
             }),
             self.fetchLog().catch(function() {
-                return { content: T('暂无日志') };
+                return { status: '', exec_log: '', system_log: '' };
             })
         ]);
     },
@@ -559,13 +567,25 @@ return view.extend({
         }, T('升级面板'));
         this.dashUpgradeBtn = dashUpgradeBtn;
 
-        var logPre = E('pre', {
-            style: 'max-height:300px;overflow-y:auto;padding:10px;background:' + theme.logBg + ';color:' + theme.logColor + ';font-size:12px;line-height:1.4;border-radius:4px;white-space:pre-wrap;word-break:break-all'
-        }, (logData && logData.content) || T('暂无日志'));
-        this.logEl = logPre;
-        /* 用初始日志内容播种累计缓冲区，使页面加载时已有的日志作为首块保留 / Seed the accumulator with the initial log so pre-loaded content is kept as the first block */
-        this.logAccum = (logData && logData.content) || '';
-        this._lastRaw = this.logAccum;
+        var logPreStyle = 'max-height:240px;overflow-y:auto;padding:10px;background:' + theme.logBg + ';color:' + theme.logColor + ';font-size:12px;line-height:1.4;border-radius:4px;white-space:pre-wrap;word-break:break-all';
+        var secStyle = 'margin:16px 0 6px;font-size:13px;font-weight:bold;color:' + theme.mutedColor + ';';
+
+        /* 第一部分：AdGuardHome 状态（固定位置，每次刷新直接清除重载） / Part 1: AGH status (fixed position; cleared + reloaded on every refresh) */
+        var statusPre = E('pre', { style: logPreStyle },
+            (logData && logData.status && logData.status.trim()) || T('暂无状态'));
+        this.statusLogEl = statusPre;
+
+        /* 第二部分：执行/升级日志（固定位置，滚动追加、行数封顶） / Part 2: exec/upgrade log (fixed position; scroll-append, line-capped) */
+        var execPre = E('pre', { style: logPreStyle }, (logData && logData.exec_log) || T('暂无日志'));
+        this.execLogEl = execPre;
+        this.execAccum = (logData && logData.exec_log) || '';
+        this.execLast = this.execAccum;
+
+        /* 第三部分：系统/运行日志（固定位置，滚动追加、行数封顶） / Part 3: system/runtime log (fixed position; scroll-append, line-capped) */
+        var sysPre = E('pre', { style: logPreStyle }, (logData && logData.system_log) || T('暂无日志'));
+        this.sysLogEl = sysPre;
+        this.sysAccum = (logData && logData.system_log) || '';
+        this.sysLast = this.sysAccum;
 
         var refreshLogBtn = E('button', {
             class: 'btn cbi-button cbi-button-action',
@@ -714,7 +734,12 @@ return view.extend({
                     refreshLogBtn,
                     clearLogBtn,
                     autoRefreshLogLabel,
-                    logPre
+                    E('div', { style: secStyle }, T('AdGuardHome 状态')),
+                    statusPre,
+                    E('div', { style: secStyle }, T('执行 / 升级日志')),
+                    execPre,
+                    E('div', { style: secStyle }, T('系统 / 运行日志')),
+                    sysPre
                 ])
             ])
         ]);
@@ -997,31 +1022,55 @@ return view.extend({
     },
 
     /* 把服务端拉取的 EXEC_LOG 增量合并进累计缓冲区：跨多次检查不丢失历史（除非手动清空） / Merge the pulled EXEC_LOG into the accumulated buffer: history survives across checks (until manual clear) */
-    _accumLog: function(raw) {
-        var acc = this.logAccum || '';
-        var last = this._lastRaw || '';
-        if (raw == null) return acc;
-        if (raw.length === 0) { this._lastRaw = raw; return acc; }
+    /* 把服务端拉取的某段日志增量合并进该段累计缓冲区，返回 { acc, last }。
+       同段内服务端在尾部追加 → 只并入新增；新一轮（服务端被清空重写）→ 整段作为新块追加，避免重复。
+       Merge a server-pulled segment into that segment's accumulator; returns { acc, last }.
+       Same run (server appends at tail) → merge only the new part; new run (server truncated then rewrote) → append whole block, avoid dupes. */
+    _accumPart: function(acc, last, raw) {
+        if (raw == null) return { acc: acc, last: last };
+        if (raw.length === 0) return { acc: acc, last: raw };
         if (last.length === 0) {
-            this.logAccum = raw;
-            this._lastRaw = raw;
-            return raw;
+            return { acc: raw, last: raw };
         }
         if (raw.length > last.length && raw.indexOf(last) === 0) {
-            /* 同一次检查：服务端日志在末尾追加，只把新增部分并入累计 / same run: server log grew at the tail; merge only the new part */
-            this.logAccum = acc + raw.slice(last.length);
+            /* 同一次运行：服务端日志在末尾追加，只把新增部分并入累计 / same run: server log grew at the tail; merge only the new part */
+            acc = acc + raw.slice(last.length);
         } else if (raw === last) {
             /* 无变化 / unchanged */
         } else {
-            /* 新一轮检查（服务端被清空后重新写入）：整段作为新块并入，避免重复 / new run (server truncated then rewrote): append whole block as a new run, avoid duplicates */
-            if (acc.length >= raw.length && acc.slice(-raw.length) === raw) {
-                /* 已在尾部，无需重复 / already at tail */
-            } else {
-                this.logAccum = acc + "\n" + raw;
+            /* 新一轮（服务端被清空后重新写入）：整段作为新块并入，避免重复 / new run (server truncated then rewrote): append whole block as a new run, avoid duplicates */
+            if (!(acc.length >= raw.length && acc.slice(-raw.length) === raw)) {
+                acc = acc + "\n" + raw;
             }
         }
-        this._lastRaw = raw;
-        return this.logAccum;
+        return { acc: acc, last: raw };
+    },
+
+    /* 把三段日志分别渲染到固定位置：第一部位直接清除重载；第二、第三部分滚动追加 / Render the three log segments into fixed positions: part 1 clears+reloads; parts 2&3 scroll-append */
+    _renderLog: function(data) {
+        var self = this;
+        if (!data) return;
+        /* 第一部分：AdGuardHome 状态 —— 直接清除重载（每次都重新拉取，不累计） / Part 1: AGH status — clear + reload (always re-fetched, not accumulated) */
+        if (self.statusLogEl) {
+            self.statusLogEl.textContent = (data.status && data.status.trim()) || T('无状态信息');
+            self.statusLogEl.scrollTop = self.statusLogEl.scrollHeight;
+        }
+        /* 第二部分：执行/升级日志 —— 滚动追加（行数封顶） / Part 2: exec/upgrade log — scroll-append (line-capped) */
+        if (self.execLogEl) {
+            var r2 = self._accumPart(self.execAccum, self.execLast, data.exec_log || '');
+            self.execAccum = r2.acc;
+            self.execLast = r2.last;
+            self.execLogEl.textContent = self._tailLines(self.execAccum, self.MAX_LOG_LINES);
+            self.execLogEl.scrollTop = self.execLogEl.scrollHeight;
+        }
+        /* 第三部分：系统/运行日志 —— 滚动追加（行数封顶） / Part 3: system/runtime log — scroll-append (line-capped) */
+        if (self.sysLogEl) {
+            var r3 = self._accumPart(self.sysAccum, self.sysLast, data.system_log || '');
+            self.sysAccum = r3.acc;
+            self.sysLast = r3.last;
+            self.sysLogEl.textContent = self._tailLines(self.sysAccum, self.MAX_LOG_LINES);
+            self.sysLogEl.scrollTop = self.sysLogEl.scrollHeight;
+        }
     },
 
     /* 取最后 N 行（滚动窗口），避免 DOM 无限增长 / Take the last N lines (scrolling window) to avoid unbounded DOM growth */
@@ -1035,13 +1084,10 @@ return view.extend({
     refreshLog: function() {
         var self = this;
         this.fetchLog().then(function(data) {
-            if (self.logEl) {
-                var acc = self._accumLog((data && data.content) || '');
-                self.logEl.textContent = self._tailLines(acc, self.MAX_LOG_LINES);
-                self.logEl.scrollTop = self.logEl.scrollHeight;
-            }
+            /* 三段各自渲染：第一部分清除重载，第二、三部分滚动追加 / render three segments: part1 clear+reload, parts2&3 scroll-append */
+            self._renderLog(data);
         }).catch(function() {
-            if (self.logEl) self.logEl.textContent = T('获取日志失败');
+            if (self.statusLogEl) self.statusLogEl.textContent = T('获取日志失败');
         });
     },
 
@@ -1051,16 +1097,20 @@ return view.extend({
             return res.json();
         }).then(function(d) {
             if (d && d.success) {
-                /* 仅清视图：第一部分(EXEC_LOG)已由服务端清空并持久；
-                   第二部分(系统/AGH 运行日志)属系统自身，不在服务端删除，
-                   刷新后由 fetchLog 重新拉取继续显示。此处只清空当前视图。
-                   [EN] View-only clear: part 1 (EXEC_LOG) is already cleared & persisted server-side;
-                   part 2 (system/AGH runtime log) belongs to the system and is not deleted server-side;
-                   after refresh fetchLog re-pulls it. Here we only clear the current view. */
-                if (self.logEl) self.logEl.textContent = "";
-                /* 同时重置前端累计缓冲区，确保下次检查从头累计 / also reset the frontend accumulator so the next check starts fresh */
-                self.logAccum = "";
-                self._lastRaw = "";
+                /* 仅清视图：执行/升级日志(EXEC_LOG)已由服务端清空并持久；
+                   系统/运行日志属系统自身，不在服务端删除，刷新后由 fetchLog 重新拉取继续显示；
+                   此处清空当前三段视图并重置前端累计缓冲区（第一部分本就每次重载，无需累计）。
+                   [EN] View-only clear: exec/upgrade log (EXEC_LOG) is already cleared & persisted server-side;
+                   system/runtime log belongs to the system and is not deleted server-side;
+                   after refresh fetchLog re-pulls it. Here we clear the three view segments and reset the
+                   accumulators (part 1 is reloaded every time anyway, so it needs no accumulation). */
+                if (self.statusLogEl) self.statusLogEl.textContent = "";
+                if (self.execLogEl) self.execLogEl.textContent = "";
+                if (self.sysLogEl) self.sysLogEl.textContent = "";
+                self.execAccum = "";
+                self.execLast = "";
+                self.sysAccum = "";
+                self.sysLast = "";
             } else {
                 alert((d && d.error) || T('清空失败'));
             }
@@ -1096,13 +1146,11 @@ return view.extend({
         this.logPollInterval = setInterval(function() {
             pollCount++;
             self.fetchLog().then(function(data) {
-                if (self.logEl && data && data.content) {
-                    var acc = self._accumLog(data.content);
-                    self.logEl.textContent = self._tailLines(acc, self.MAX_LOG_LINES);
-                    self.logEl.scrollTop = self.logEl.scrollHeight;
-                }
-                if (data && data.content) {
-                    var c = data.content;
+                /* 三段各自渲染：第一部分清除重载，第二、三部分滚动追加 / render three segments: part1 clear+reload, parts2&3 scroll-append */
+                self._renderLog(data);
+                if (data && data.exec_log) {
+                    /* 完成/失败判定基于执行/升级日志（第二部分）中的标记 / completion/failure detection uses markers in the exec/upgrade log (part 2) */
+                    var c = data.exec_log;
                     var done = false;
                     if (c.indexOf('FAILED') !== -1) {
                         done = true;
@@ -1155,10 +1203,13 @@ return view.extend({
                 var msg = (res && res.output) || (res && res.error) || T('未知错误');
                 ui.addNotification(null, T('操作失败: ') + msg, 'error');
             }
+            /* 按钮点击后重新加载日志三段：第一部分(状态)清除重载，第二、三部分滚动追加 / after a button click, reload the three log segments: part1 clear+reload, parts2&3 scroll-append */
+            self.refreshLog();
         }).catch(function(err) {
             self._actionBusy = false;
             ui.hideModal();
             ui.addNotification(null, T('执行异常: ') + (err.message || err), 'error');
+            self.refreshLog();
         });
     },
 
