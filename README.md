@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.5.1**
+**v2.5.5**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -291,6 +291,11 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ---
 
 ## Changelog
+
+- **v2.5.5**
+  - Proxy selection simplified to: test connectivity → pick by result (install: enter number; dashboard: click) → fixed for the session; only if the chosen connection actually fails mid-download does it re-prompt with a fresh connectivity test (install.sh)
+  - Custom proxy latency test now works reliably (`proxify()` normalizes the missing trailing slash)
+  - Dashboard proxy test UX: page-load auto-test + manual per-proxy single test + "Test All" button; removed the 60s background polling and the auto re-test on upgrade FAILED (user can click test manually)
 
 - **v2.5.1**
   - Fixed install.sh verification root cause: `verify_one()` returned the boolean inverted, so valid files were flagged as failed (aborting install) and stale/cached files were silently accepted. Present since the 2.3.1 fingerprint check; now corrected (pass → 0, fail → 1)

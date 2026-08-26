@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.5.1**
+**v2.5.5**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -291,6 +291,11 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ---
 
 ## 变更记录 / Changelog
+
+- **v2.5.5**
+  - 代理选型简化为：先测试连通性 → 按结果选择（install 输入序号 / dashboard 点选）→ 当次下载固定使用 → 仅当所选连接在下载中确实失败时，才用新的连通测试结果交互提示用户改选（install.sh）
+  - 自定义代理延迟测试现在稳定可用（`proxify()` 规范化缺失的结尾斜杠）
+  - 面板代理测试交互：页面加载自动测 + 手动每个代理单点测试 + 「测试所有」按钮；移除了 60s 后台轮询与升级 FAILED 时的自动重测（用户可手动点测试）
 
 - **v2.5.1**
   - 修复安装脚本校验根因：`verify_one()` 返回语义反转，导致合法文件被误判为失败（中止安装）、陈旧/缓存文件被静默放行。该问题自 2.3.1 引入指纹校验时存在，现已修正（通过→0、失败→1）
