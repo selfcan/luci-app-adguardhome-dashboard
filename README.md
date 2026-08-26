@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.5.0**
+**v2.5.1**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -291,6 +291,13 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ---
 
 ## Changelog
+
+- **v2.5.1**
+  - Fixed install.sh verification root cause: `verify_one()` returned the boolean inverted, so valid files were flagged as failed (aborting install) and stale/cached files were silently accepted. Present since the 2.3.1 fingerprint check; now corrected (pass → 0, fail → 1)
+  - Panel self-upgrade now strictly honors the UI proxy choice (direct = direct only; selected proxy = that proxy + direct fallback) instead of always appending built-in proxies
+  - Panel self-upgrade download hardened: target dir is created before each `curl -o`, eliminating the `curl: (23)` write failure
+  - install.sh GitHub direct connectivity probe now retries (3×, 12s each) so a merely-slow `raw.githubusercontent.com` is no longer misreported as "direct unavailable"
+  - install.sh interaction is now English by default with a language picker (English / 中文); reinstall backup messaging clarified
 
 - **v2.5.0**
   - Bumped version to **2.5.0** (single version source = `manifest.json`; the router reads the locally deployed `/usr/share/adguardhome-dashboard/manifest.json` at runtime)
