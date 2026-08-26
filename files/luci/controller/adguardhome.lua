@@ -330,20 +330,59 @@ function do_action()
     http.write_json({ success = true, output = result })
 end
 
+-- 从 AGH 的 CHANGELOG.md（raw.githubusercontent.com 上的同一 host，与面板版本检查一致）
+-- 解析最新「已发布」版本号。跳过 [Unreleased] 与 HTML 注释块（注释里放的是未来预发布版本）。
+-- Parse the latest *released* version from AGH's CHANGELOG.md (same host as the dashboard
+-- check, so it works on the same connections). Skips [Unreleased] and HTML comment blocks
+-- (which hold future/unreleased version headings).
+local function parse_agh_version_from_changelog(text)
+    if not text or #text == 0 then return "" end
+    local in_comment = false
+    for line in text:gmatch("([^\n]*)\n?") do
+        if in_comment then
+            if line:find("-->", 1, true) then in_comment = false end
+        else
+            if line:find("<!--", 1, true) then
+                -- 同行业关闭则不算进入注释块 / if it also closes on the same line, stay out
+                if not line:find("-->", 1, true) then in_comment = true end
+            else
+                local v = line:match("^##%s*%[(v?[%d]+%.[%d]+%.[%d]+)%]")
+                if v then return v end
+            end
+        end
+    end
+    return ""
+end
+
 function check_update()
     resolve_proxy()
     local time_str = os.date("%Y-%m-%d %H:%M:%S")
     local pinfo = (PRIMARY_PROXY ~= "") and PRIMARY_PROXY or "direct"
     TRY_LOG = EXEC_LOG
     util.exec("echo '[" .. time_str .. "] Check AdGuardHome update (proxy=" .. pinfo .. ")' > " .. EXEC_LOG)
-    local output = try_with_proxies("https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest", true)
-    TRY_LOG = nil
+
     local latest = ""
-    if output and #output > 0 then
-        latest = output:match('"tag_name"%s*:%s*"(.-)"') or ""
+
+    -- 优先：GitHub API（结构化、准确；适用于 api.github.com 可达的网络）
+    -- Primary: GitHub API (structured, accurate; for networks where api.github.com is reachable)
+    local out_api = try_with_proxies("https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest", true)
+    if out_api and #out_api > 0 then
+        latest = out_api:match('"tag_name"%s*:%s*"(.-)"') or ""
     end
+
+    -- 回退：raw.githubusercontent.com 上的 CHANGELOG.md（适用于 api.github.com 被墙、但 raw 可达的网络，
+    -- 与面板版本检查走同一 host，体验一致）/ Fallback: CHANGELOG.md on raw.githubusercontent.com
+    -- (for networks where api.github.com is blocked but raw is reachable, same host as the dashboard check)
     if latest == "" then
-        util.exec("echo '  result: fetch failed (no reachable connection returned valid JSON)' >> " .. EXEC_LOG)
+        local out_cl = try_with_proxies("https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/CHANGELOG.md", false)
+        if out_cl and #out_cl > 0 then
+            latest = parse_agh_version_from_changelog(out_cl)
+        end
+    end
+
+    TRY_LOG = nil
+    if latest == "" then
+        util.exec("echo '  result: fetch failed (no reachable connection returned valid version)' >> " .. EXEC_LOG)
     else
         util.exec("echo '  result: latest = " .. latest .. "' >> " .. EXEC_LOG)
     end
